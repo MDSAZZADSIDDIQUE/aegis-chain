@@ -1,7 +1,5 @@
 {
   "settings": {
-    "number_of_shards": 1,
-    "number_of_replicas": 1
   },
   "mappings": {
     "properties": {
@@ -17,7 +15,7 @@
       "event_type": {
         "type": "keyword",
         "meta": {
-          "description": "hurricane | tornado | flood | wildfire | winter_storm | heat_wave | severe_thunderstorm"
+          "description": "hurricane|tornado|flood|wildfire|storm|heat_wave"
         }
       },
       "severity": {
@@ -41,13 +39,13 @@
       "affected_zone": {
         "type": "geo_shape",
         "meta": {
-          "description": "GeoJSON polygon of the threat area. Used with ST_INTERSECTS."
+          "description": "GeoJSON polygon of threat area (ST_INTERSECTS)."
         }
       },
       "centroid": {
         "type": "geo_point",
         "meta": {
-          "description": "Centroid of the affected zone for distance calculations."
+          "description": "Centroid of affected zone for distance calcs."
         }
       },
       "effective": {
@@ -71,7 +69,7 @@
       "confidence_pct": {
         "type": "float",
         "meta": {
-          "description": "NASA FIRMS confidence percentage for fire detections."
+          "description": "NASA FIRMS confidence pct for fire detections."
         }
       },
       "brightness_kelvin": {

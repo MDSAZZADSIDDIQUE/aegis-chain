@@ -1,7 +1,5 @@
 {
   "settings": {
-    "number_of_shards": 1,
-    "number_of_replicas": 1,
     "index": {
       "mode": "time_series",
       "routing_path": ["location_id", "supplier_id"],
@@ -58,7 +56,7 @@
       "weather_threat_id": {
         "type": "keyword",
         "meta": {
-          "description": "FK to weather-threats.threat_id if delay was weather-caused."
+          "description": "FK to weather-threats.threat_id for weather delay"
         }
       },
       "transport_mode": {

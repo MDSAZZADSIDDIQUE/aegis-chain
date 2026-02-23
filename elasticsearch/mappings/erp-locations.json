@@ -1,7 +1,5 @@
 {
   "settings": {
-    "number_of_shards": 1,
-    "number_of_replicas": 1,
     "analysis": {
       "analyzer": {
         "contract_analyzer": {
@@ -47,7 +45,7 @@
       "reliability_index": {
         "type": "double",
         "meta": {
-          "description": "RL-adjusted reliability score 0.0-1.0. Updated by Agent 3 Auditor."
+          "description": "RL-adjusted reliability score 0.0-1.0 (Agent 3)."
         }
       },
       "avg_lead_time_hours": {
@@ -57,7 +55,7 @@
         "type": "text",
         "analyzer": "contract_analyzer",
         "meta": {
-          "description": "Free-text SLA terms for semantic search by Agent 2."
+          "description": "Free-text SLA terms for Agent 2 semantic search."
         }
       },
       "contract_sla_vector": {
