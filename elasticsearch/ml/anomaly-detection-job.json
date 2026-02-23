@@ -1,0 +1,69 @@
+{
+  "job_id": "supply_latency_anomaly_72h",
+  "description": "Detects anomalous spikes in supply chain transit delays using 72-hour lookahead buckets. Feeds Agent 1 (Watcher) predictive bottleneck signals.",
+  "analysis_config": {
+    "bucket_span": "6h",
+    "detectors": [
+      {
+        "function": "high_mean",
+        "field_name": "delay_hours",
+        "by_field_name": "supplier_id",
+        "over_field_name": "location_id",
+        "detector_description": "Unusual mean delay per supplier per location"
+      },
+      {
+        "function": "high_sum",
+        "field_name": "shipment_value_usd",
+        "partition_field_name": "location_id",
+        "detector_description": "Abnormal total shipment value at risk per location"
+      },
+      {
+        "function": "freq_rare",
+        "by_field_name": "disruption_cause",
+        "partition_field_name": "location_id",
+        "detector_description": "Rare disruption cause appearing at a location"
+      }
+    ],
+    "influencers": [
+      "supplier_id",
+      "location_id",
+      "disruption_cause",
+      "transport_mode"
+    ],
+    "model_prune_window": "30d"
+  },
+  "data_description": {
+    "time_field": "@timestamp",
+    "time_format": "epoch_ms"
+  },
+  "analysis_limits": {
+    "model_memory_limit": "256mb"
+  },
+  "results_index_name": "aegis-ml-results",
+  "datafeed_config": {
+    "datafeed_id": "datafeed-supply_latency_anomaly_72h",
+    "indices": ["supply-latency-logs"],
+    "query": {
+      "bool": {
+        "filter": [
+          {
+            "range": {
+              "@timestamp": {
+                "gte": "now-30d"
+              }
+            }
+          }
+        ]
+      }
+    },
+    "frequency": "5m",
+    "query_delay": "60s",
+    "scroll_size": 1000
+  },
+  "custom_settings": {
+    "created_by": "aegis-chain-watcher-agent",
+    "project": "aegis-chain",
+    "lookahead_window": "72h",
+    "notes": "Results consumed by Agent 1 Watcher for predictive bottleneck detection. Anomaly scores above 75 trigger threat correlation via ST_INTERSECTS."
+  }
+}

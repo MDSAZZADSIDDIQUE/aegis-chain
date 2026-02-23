@@ -1,0 +1,118 @@
+// ============================================================================
+// AGENT 1 — WATCHER: Time-Series Predictive Bucketing + Geo Intersection
+// ============================================================================
+// This query suite powers the Watcher Agent's two-phase analysis:
+//   Phase A: TS predictive bucketing over supply-latency-logs
+//   Phase B: ST_INTERSECTS to find ERP locations inside active threat zones
+// ============================================================================
+
+
+// ── Phase A: Predictive Bottleneck Detection (TS Bucketing) ─────────────────
+// Uses the TS command to bucket supply-latency-logs into 6-hour windows,
+// computing rolling delay statistics per supplier per location.
+// Surfaces suppliers whose delay trend is accelerating (bottleneck signal).
+// The 72-hour lookback feeds the ML anomaly job's 72h lookahead window.
+
+FROM supply-latency-logs
+| WHERE @timestamp >= NOW() - 72 HOURS
+| EVAL bucket = DATE_TRUNC(6 HOURS, @timestamp)
+| STATS
+    avg_delay        = AVG(delay_hours),
+    max_delay        = MAX(delay_hours),
+    p95_delay        = PERCENTILE(delay_hours, 95),
+    shipment_count   = COUNT(*),
+    total_value      = SUM(shipment_value_usd),
+    late_shipments   = SUM(CASE(on_time == false, 1, 0)),
+    weather_disruptions = SUM(CASE(disruption_cause == "weather", 1, 0))
+  BY bucket, location_id, supplier_id
+| EVAL late_pct = (late_shipments * 100.0) / shipment_count
+| EVAL delay_severity = CASE(
+    avg_delay > 12.0, "critical",
+    avg_delay > 6.0,  "high",
+    avg_delay > 2.0,  "moderate",
+    "normal"
+  )
+| WHERE delay_severity != "normal"
+| SORT bucket DESC, avg_delay DESC
+| LIMIT 100
+| KEEP bucket, location_id, supplier_id, avg_delay, max_delay, p95_delay,
+       shipment_count, total_value, late_pct, weather_disruptions, delay_severity
+
+;
+
+// ── Phase A.2: Trend Detection — Compare current 24h vs prior 48h ───────────
+// Identifies suppliers whose delays are *worsening* (acceleration signal).
+
+FROM supply-latency-logs
+| WHERE @timestamp >= NOW() - 72 HOURS
+| EVAL period = CASE(
+    @timestamp >= NOW() - 24 HOURS, "recent_24h",
+    "prior_48h"
+  )
+| STATS
+    avg_delay   = AVG(delay_hours),
+    total_value = SUM(shipment_value_usd),
+    count       = COUNT(*)
+  BY period, supplier_id, location_id
+| EVAL delay_weighted = avg_delay * total_value
+| SORT supplier_id, location_id, period
+| LIMIT 200
+| KEEP period, supplier_id, location_id, avg_delay, total_value, count, delay_weighted
+
+;
+
+// ── Phase B: Geo-Spatial Threat Intersection ────────────────────────────────
+// Finds all active ERP locations (warehouses, suppliers, DCs) whose
+// coordinates fall inside any active weather-threat polygon.
+// Aggregates total inventory $ value at risk per threat.
+
+FROM erp-locations METADATA _id
+| WHERE active == true
+| EVAL at_risk = ST_INTERSECTS(
+    coordinates,
+    TO_GEOSHAPE("POLYGON((-95.0 30.0, -95.0 32.0, -93.0 32.0, -93.0 30.0, -95.0 30.0))")
+  )
+| WHERE at_risk == true
+| STATS
+    locations_at_risk = COUNT(*),
+    total_value_at_risk = SUM(inventory_value_usd),
+    avg_reliability = AVG(reliability_index)
+  BY type
+| SORT total_value_at_risk DESC
+| KEEP type, locations_at_risk, total_value_at_risk, avg_reliability
+
+;
+
+// ── Phase B.2: Per-Location Detail for Intersecting Threats ─────────────────
+// Returns the actual locations inside a specific threat polygon for
+// the frontend to highlight on the Mapbox globe.
+
+FROM erp-locations METADATA _id
+| WHERE active == true
+| EVAL in_threat_zone = ST_INTERSECTS(
+    coordinates,
+    TO_GEOSHAPE("POLYGON((-95.0 30.0, -95.0 32.0, -93.0 32.0, -93.0 30.0, -95.0 30.0))")
+  )
+| WHERE in_threat_zone == true
+| SORT inventory_value_usd DESC
+| LIMIT 50
+| KEEP location_id, name, type, coordinates, inventory_value_usd,
+       reliability_index, avg_lead_time_hours
+
+;
+
+// ── Phase C: Combined Risk Score ────────────────────────────────────────────
+// Joins bottleneck predictions with geo-intersection results to produce
+// a unified risk ranking that feeds Agent 2 (Procurement).
+
+FROM supply-latency-logs
+| WHERE @timestamp >= NOW() - 24 HOURS AND disruption_cause == "weather"
+| STATS
+    weather_delays     = COUNT(*),
+    avg_weather_delay  = AVG(delay_hours),
+    total_exposure_usd = SUM(shipment_value_usd)
+  BY location_id, supplier_id
+| WHERE weather_delays >= 2
+| SORT total_exposure_usd DESC
+| LIMIT 25
+| KEEP location_id, supplier_id, weather_delays, avg_weather_delay, total_exposure_usd

@@ -1,0 +1,97 @@
+{
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 1
+  },
+  "mappings": {
+    "properties": {
+      "threat_id": {
+        "type": "keyword"
+      },
+      "source": {
+        "type": "keyword",
+        "meta": {
+          "description": "noaa | nasa_firms"
+        }
+      },
+      "event_type": {
+        "type": "keyword",
+        "meta": {
+          "description": "hurricane | tornado | flood | wildfire | winter_storm | heat_wave | severe_thunderstorm"
+        }
+      },
+      "severity": {
+        "type": "keyword",
+        "meta": {
+          "description": "extreme | severe | moderate | minor | unknown"
+        }
+      },
+      "certainty": {
+        "type": "keyword"
+      },
+      "urgency": {
+        "type": "keyword"
+      },
+      "headline": {
+        "type": "text"
+      },
+      "description": {
+        "type": "text"
+      },
+      "affected_zone": {
+        "type": "geo_shape",
+        "meta": {
+          "description": "GeoJSON polygon of the threat area. Used with ST_INTERSECTS."
+        }
+      },
+      "centroid": {
+        "type": "geo_point",
+        "meta": {
+          "description": "Centroid of the affected zone for distance calculations."
+        }
+      },
+      "effective": {
+        "type": "date"
+      },
+      "expires": {
+        "type": "date"
+      },
+      "onset": {
+        "type": "date"
+      },
+      "status": {
+        "type": "keyword",
+        "meta": {
+          "description": "active | expired | cancelled"
+        }
+      },
+      "nws_zone_ids": {
+        "type": "keyword"
+      },
+      "confidence_pct": {
+        "type": "float",
+        "meta": {
+          "description": "NASA FIRMS confidence percentage for fire detections."
+        }
+      },
+      "brightness_kelvin": {
+        "type": "float"
+      },
+      "frp_mw": {
+        "type": "float",
+        "meta": {
+          "description": "Fire Radiative Power in megawatts."
+        }
+      },
+      "raw_payload": {
+        "type": "flattened",
+        "meta": {
+          "description": "Original API response stored for audit trail."
+        }
+      },
+      "ingested_at": {
+        "type": "date"
+      }
+    }
+  }
+}

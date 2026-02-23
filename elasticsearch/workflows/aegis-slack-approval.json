@@ -1,0 +1,258 @@
+{
+  "name": "aegis-slack-approval",
+  "description": "Triggered by Agent 3 (Auditor) when a reroute proposal exceeds the $50,000 HITL threshold or has low confidence. Sends an interactive Slack message with Approve/Reject buttons and pauses the pipeline until a human responds.",
+  "triggers": [
+    {
+      "type": "api",
+      "id": "slack_approval_trigger",
+      "description": "Called by the Auditor Agent when HITL escalation is required."
+    },
+    {
+      "type": "workflow_reference",
+      "id": "escalation_from_auto",
+      "description": "Called by aegis-auto-execute workflow on validation failure."
+    }
+  ],
+  "steps": [
+    {
+      "id": "build_slack_payload",
+      "type": "transform",
+      "description": "Construct the Slack Block Kit interactive message.",
+      "output": {
+        "slack_payload": {
+          "blocks": [
+            {
+              "type": "header",
+              "text": {
+                "type": "plain_text",
+                "text": ":rotating_light: AegisChain — HITL Approval Required"
+              }
+            },
+            {
+              "type": "section",
+              "fields": [
+                {
+                  "type": "mrkdwn",
+                  "text": "*Proposal ID:*\n`{{proposal.proposal_id}}`"
+                },
+                {
+                  "type": "mrkdwn",
+                  "text": "*Threat ID:*\n`{{proposal.threat_id}}`"
+                },
+                {
+                  "type": "mrkdwn",
+                  "text": "*Current Supplier:*\n{{proposal.original_supplier_id}}"
+                },
+                {
+                  "type": "mrkdwn",
+                  "text": "*Proposed Supplier:*\n{{proposal.proposed_supplier_name}}"
+                },
+                {
+                  "type": "mrkdwn",
+                  "text": "*Reroute Cost:*\n${{proposal.reroute_cost_usd}}"
+                },
+                {
+                  "type": "mrkdwn",
+                  "text": "*Attention Score:*\n{{proposal.attention_score}}"
+                }
+              ]
+            },
+            {
+              "type": "section",
+              "text": {
+                "type": "mrkdwn",
+                "text": "*Auditor Confidence:* {{verdict.confidence}}\n*Drive Time:* {{proposal.mapbox_drive_time_minutes}} min\n*Distance:* {{proposal.mapbox_distance_km}} km"
+              }
+            },
+            {
+              "type": "section",
+              "text": {
+                "type": "mrkdwn",
+                "text": "*Agent Rationale:*\n>{{verdict.explanation}}"
+              }
+            },
+            {
+              "type": "section",
+              "text": {
+                "type": "mrkdwn",
+                "text": "*Reflection Scores:*\n• Attention: {{verdict.reflection_scores.attention_weighted}}\n• Reliability: {{verdict.reflection_scores.reliability_weighted}}\n• Cost Efficiency: {{verdict.reflection_scores.cost_efficiency_weighted}}\n• Drive Time: {{verdict.reflection_scores.drive_time_weighted}}\n• SLA: {{verdict.reflection_scores.sla_weighted}}\n• Historical Penalty: {{verdict.reflection_scores.historical_penalty}}"
+              }
+            },
+            { "type": "divider" },
+            {
+              "type": "actions",
+              "block_id": "hitl_{{proposal.proposal_id}}",
+              "elements": [
+                {
+                  "type": "button",
+                  "text": { "type": "plain_text", "text": "Approve Reroute" },
+                  "style": "primary",
+                  "action_id": "hitl_approve",
+                  "value": "{{proposal.proposal_id}}",
+                  "confirm": {
+                    "title": { "type": "plain_text", "text": "Confirm Approval" },
+                    "text": { "type": "mrkdwn", "text": "Approve reroute to *{{proposal.proposed_supplier_name}}* at a cost of *${{proposal.reroute_cost_usd}}*?" },
+                    "confirm": { "type": "plain_text", "text": "Yes, Approve" },
+                    "deny": { "type": "plain_text", "text": "Cancel" }
+                  }
+                },
+                {
+                  "type": "button",
+                  "text": { "type": "plain_text", "text": "Reject Reroute" },
+                  "style": "danger",
+                  "action_id": "hitl_reject",
+                  "value": "{{proposal.proposal_id}}",
+                  "confirm": {
+                    "title": { "type": "plain_text", "text": "Confirm Rejection" },
+                    "text": { "type": "mrkdwn", "text": "Reject this reroute proposal? The system will attempt alternative suppliers on the next cycle." },
+                    "confirm": { "type": "plain_text", "text": "Yes, Reject" },
+                    "deny": { "type": "plain_text", "text": "Cancel" }
+                  }
+                }
+              ]
+            }
+          ],
+          "text": "AegisChain HITL: Reroute approval needed for {{proposal.proposal_id}} (${{proposal.reroute_cost_usd}})"
+        }
+      }
+    },
+    {
+      "id": "send_slack_message",
+      "type": "webhook",
+      "description": "Post the interactive message to Slack.",
+      "method": "POST",
+      "url": "{{env.SLACK_WEBHOOK_URL}}",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": "{{steps.build_slack_payload.output.slack_payload}}"
+    },
+    {
+      "id": "index_pending_record",
+      "type": "elasticsearch",
+      "description": "Record the pending HITL request in the execution log.",
+      "action": "index",
+      "index": "aegis-execution-log",
+      "document": {
+        "execution_id": "{{proposal.proposal_id}}-hitl",
+        "proposal_id": "{{proposal.proposal_id}}",
+        "threat_id": "{{proposal.threat_id}}",
+        "execution_type": "hitl",
+        "original_supplier_id": "{{proposal.original_supplier_id}}",
+        "new_supplier_id": "{{proposal.proposed_supplier_id}}",
+        "new_supplier_name": "{{proposal.proposed_supplier_name}}",
+        "reroute_cost_usd": "{{proposal.reroute_cost_usd}}",
+        "attention_score": "{{proposal.attention_score}}",
+        "auditor_confidence": "{{verdict.confidence}}",
+        "rationale": "{{verdict.explanation}}",
+        "reflection_scores": "{{verdict.reflection_scores}}",
+        "status": "awaiting_human_approval",
+        "requested_at": "{{now}}",
+        "slack_sent": true
+      }
+    },
+    {
+      "id": "wait_for_response",
+      "type": "pause",
+      "description": "Pipeline pauses here. Resumes when Slack callback hits /slack/actions endpoint, which updates the proposal status and triggers the resume webhook.",
+      "timeout_minutes": 1440,
+      "resume_on": {
+        "type": "webhook",
+        "path": "/workflow/resume/{{proposal.proposal_id}}",
+        "expected_fields": ["action", "user_id"]
+      },
+      "on_timeout": "timeout_handler"
+    },
+    {
+      "id": "process_human_decision",
+      "type": "condition",
+      "description": "Route based on human's Approve/Reject decision.",
+      "condition": {
+        "fact": "resume_data.action",
+        "operator": "equal",
+        "value": "approve"
+      },
+      "on_true": "execute_approved_reroute",
+      "on_false": "handle_rejection"
+    },
+    {
+      "id": "execute_approved_reroute",
+      "type": "elasticsearch",
+      "description": "Human approved — execute the reroute and log it.",
+      "action": "update",
+      "index": "aegis-execution-log",
+      "id": "{{proposal.proposal_id}}-hitl",
+      "document": {
+        "status": "approved_and_executed",
+        "approved_by": "{{resume_data.user_id}}",
+        "approved_at": "{{now}}"
+      }
+    },
+    {
+      "id": "handle_rejection",
+      "type": "elasticsearch",
+      "description": "Human rejected — log rejection and apply RL penalty.",
+      "action": "update",
+      "index": "aegis-execution-log",
+      "id": "{{proposal.proposal_id}}-hitl",
+      "document": {
+        "status": "rejected_by_human",
+        "rejected_by": "{{resume_data.user_id}}",
+        "rejected_at": "{{now}}"
+      }
+    },
+    {
+      "id": "rl_penalty_on_reject",
+      "type": "elasticsearch",
+      "description": "Apply RL penalty to the proposed supplier after human rejection.",
+      "depends_on": "handle_rejection",
+      "action": "update_by_query",
+      "index": "erp-locations",
+      "query": {
+        "term": { "location_id": "{{proposal.proposed_supplier_id}}" }
+      },
+      "script": {
+        "source": "ctx._source.reliability_index = Math.max(0.0, ctx._source.reliability_index - params.penalty)",
+        "params": { "penalty": 0.05 }
+      }
+    },
+    {
+      "id": "timeout_handler",
+      "type": "elasticsearch",
+      "description": "No human response within 24h — auto-escalate and log.",
+      "action": "update",
+      "index": "aegis-execution-log",
+      "id": "{{proposal.proposal_id}}-hitl",
+      "document": {
+        "status": "timeout_no_response",
+        "timed_out_at": "{{now}}"
+      }
+    }
+  ],
+  "error_handling": {
+    "on_failure": {
+      "type": "elasticsearch",
+      "action": "index",
+      "index": "aegis-execution-log",
+      "document": {
+        "execution_id": "{{proposal.proposal_id}}-hitl-error",
+        "proposal_id": "{{proposal.proposal_id}}",
+        "execution_type": "hitl",
+        "status": "error",
+        "error": "{{error.message}}",
+        "timestamp": "{{now}}"
+      }
+    },
+    "retry": {
+      "max_attempts": 3,
+      "delay_seconds": 15
+    }
+  },
+  "metadata": {
+    "version": "1.0.0",
+    "created_by": "aegis-chain",
+    "agent": "auditor",
+    "threshold_usd": 50000,
+    "slack_timeout_minutes": 1440
+  }
+}

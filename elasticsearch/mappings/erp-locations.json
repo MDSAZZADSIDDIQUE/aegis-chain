@@ -1,0 +1,86 @@
+{
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 1,
+    "analysis": {
+      "analyzer": {
+        "contract_analyzer": {
+          "type": "custom",
+          "tokenizer": "standard",
+          "filter": ["lowercase", "stop", "snowball"]
+        }
+      }
+    }
+  },
+  "mappings": {
+    "properties": {
+      "location_id": {
+        "type": "keyword"
+      },
+      "name": {
+        "type": "text",
+        "fields": {
+          "keyword": { "type": "keyword" }
+        }
+      },
+      "type": {
+        "type": "keyword",
+        "meta": {
+          "description": "warehouse | supplier | distribution_center | port"
+        }
+      },
+      "coordinates": {
+        "type": "geo_point"
+      },
+      "address": {
+        "type": "text"
+      },
+      "region": {
+        "type": "keyword"
+      },
+      "country_code": {
+        "type": "keyword"
+      },
+      "inventory_value_usd": {
+        "type": "double"
+      },
+      "reliability_index": {
+        "type": "double",
+        "meta": {
+          "description": "RL-adjusted reliability score 0.0-1.0. Updated by Agent 3 Auditor."
+        }
+      },
+      "avg_lead_time_hours": {
+        "type": "float"
+      },
+      "contract_sla": {
+        "type": "text",
+        "analyzer": "contract_analyzer",
+        "meta": {
+          "description": "Free-text SLA terms for semantic search by Agent 2."
+        }
+      },
+      "contract_sla_vector": {
+        "type": "dense_vector",
+        "dims": 384,
+        "index": true,
+        "similarity": "cosine",
+        "meta": {
+          "description": "E5-small embedding of contract_sla for kNN search."
+        }
+      },
+      "capacity_units": {
+        "type": "integer"
+      },
+      "active": {
+        "type": "boolean"
+      },
+      "tags": {
+        "type": "keyword"
+      },
+      "last_updated": {
+        "type": "date"
+      }
+    }
+  }
+}

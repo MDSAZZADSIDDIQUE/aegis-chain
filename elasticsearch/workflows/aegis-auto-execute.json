@@ -1,0 +1,116 @@
+{
+  "name": "aegis-auto-execute",
+  "description": "Triggered by Agent 3 (Auditor) when a reroute proposal passes all checks and costs less than the HITL threshold ($50,000). Executes the reroute automatically without human intervention.",
+  "triggers": [
+    {
+      "type": "api",
+      "id": "auto_execute_trigger",
+      "description": "Called programmatically by the Auditor Agent's verdict endpoint."
+    }
+  ],
+  "steps": [
+    {
+      "id": "validate_proposal",
+      "type": "condition",
+      "description": "Verify the proposal exists and cost is within threshold.",
+      "condition": {
+        "all": [
+          { "fact": "proposal.reroute_cost_usd", "operator": "lessThan", "value": 50000 },
+          { "fact": "verdict.confidence", "operator": "greaterThanOrEqual", "value": 0.30 },
+          { "fact": "verdict.approved", "operator": "equal", "value": true }
+        ]
+      },
+      "on_true": "index_execution_record",
+      "on_false": "escalate_to_hitl"
+    },
+    {
+      "id": "index_execution_record",
+      "type": "elasticsearch",
+      "description": "Index the auto-executed reroute decision for audit trail.",
+      "action": "index",
+      "index": "aegis-execution-log",
+      "document": {
+        "execution_id": "{{proposal.proposal_id}}-exec",
+        "proposal_id": "{{proposal.proposal_id}}",
+        "threat_id": "{{proposal.threat_id}}",
+        "execution_type": "auto",
+        "original_supplier_id": "{{proposal.original_supplier_id}}",
+        "new_supplier_id": "{{proposal.proposed_supplier_id}}",
+        "new_supplier_name": "{{proposal.proposed_supplier_name}}",
+        "reroute_cost_usd": "{{proposal.reroute_cost_usd}}",
+        "attention_score": "{{proposal.attention_score}}",
+        "auditor_confidence": "{{verdict.confidence}}",
+        "drive_time_minutes": "{{proposal.mapbox_drive_time_minutes}}",
+        "rationale": "{{verdict.explanation}}",
+        "executed_at": "{{now}}",
+        "status": "executed"
+      }
+    },
+    {
+      "id": "update_supplier_status",
+      "type": "elasticsearch",
+      "description": "Mark the original at-risk supplier as temporarily inactive and flag the new supplier as the active route.",
+      "action": "update_by_query",
+      "index": "erp-locations",
+      "query": {
+        "term": { "location_id": "{{proposal.original_supplier_id}}" }
+      },
+      "script": {
+        "source": "ctx._source.tags = ctx._source.tags != null ? ctx._source.tags : []; ctx._source.tags.add('rerouted'); ctx._source.last_updated = params.now",
+        "params": { "now": "{{now}}" }
+      }
+    },
+    {
+      "id": "notify_dashboard",
+      "type": "webhook",
+      "description": "Push execution event to the Next.js frontend via WebSocket relay.",
+      "method": "POST",
+      "url": "http://localhost:8000/internal/execution-event",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": {
+        "event": "auto_execute",
+        "proposal_id": "{{proposal.proposal_id}}",
+        "supplier": "{{proposal.proposed_supplier_name}}",
+        "cost": "{{proposal.reroute_cost_usd}}",
+        "confidence": "{{verdict.confidence}}"
+      }
+    },
+    {
+      "id": "escalate_to_hitl",
+      "type": "workflow_reference",
+      "description": "Fallback: if validation fails, escalate to HITL Slack workflow.",
+      "workflow_id": "aegis-slack-approval",
+      "params": {
+        "proposal": "{{proposal}}",
+        "verdict": "{{verdict}}"
+      }
+    }
+  ],
+  "error_handling": {
+    "on_failure": {
+      "type": "elasticsearch",
+      "action": "index",
+      "index": "aegis-execution-log",
+      "document": {
+        "execution_id": "{{proposal.proposal_id}}-error",
+        "proposal_id": "{{proposal.proposal_id}}",
+        "execution_type": "auto",
+        "status": "error",
+        "error": "{{error.message}}",
+        "executed_at": "{{now}}"
+      }
+    },
+    "retry": {
+      "max_attempts": 2,
+      "delay_seconds": 10
+    }
+  },
+  "metadata": {
+    "version": "1.0.0",
+    "created_by": "aegis-chain",
+    "agent": "auditor",
+    "threshold_usd": 50000
+  }
+}

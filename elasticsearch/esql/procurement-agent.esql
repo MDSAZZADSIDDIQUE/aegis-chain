@@ -1,0 +1,119 @@
+// ============================================================================
+// AGENT 2 — PROCUREMENT: LOOKUP JOIN + ST_DISTANCE + Attention Score
+// ============================================================================
+// This query suite powers Agent 2's supplier selection pipeline:
+//   1. LOOKUP JOIN: merge semantic SLA scores with structured reliability
+//   2. ST_DISTANCE: exclude suppliers within 100km of threat centroid
+//   3. Attention Score: compute the weighted ranking formula
+//
+// Attention Score Formula:
+//   A_i = softmax( (Reliability_i * SLA_Match_i) / sqrt(d_km_i) )
+//         * (1 / drive_time_hours_i)
+// ============================================================================
+
+
+// ── Query 1: LOOKUP JOIN — Merge SLA Semantic Scores with Reliability ───────
+// The lookup index "supplier-sla-scores" is a pre-computed enrich index
+// populated by the kNN semantic search on contract_sla_vector.
+// This JOIN merges the unstructured semantic match score with the
+// structured reliability_index and avg_lead_time_hours.
+
+FROM erp-locations METADATA _id
+| WHERE type == "supplier" AND active == true
+| LOOKUP JOIN supplier-sla-scores ON location_id
+| EVAL sla_match = COALESCE(sla_score, 0.5)
+| EVAL combined_signal = reliability_index * sla_match
+| SORT combined_signal DESC
+| LIMIT 30
+| KEEP location_id, name, coordinates, reliability_index, avg_lead_time_hours,
+       inventory_value_usd, sla_match, combined_signal, contract_sla
+
+;
+
+// ── Query 2: ST_DISTANCE Exclusion Zone + Distance Ranking ──────────────────
+// Filters out any supplier within 100km of the threat centroid.
+// Computes the exact geodesic distance for the attention score denominator.
+// The threat centroid is parameterized (replace POINT with actual coords).
+
+FROM erp-locations METADATA _id
+| WHERE type == "supplier" AND active == true
+| EVAL dist_m = ST_DISTANCE(coordinates, TO_GEOPOINT("POINT(-94.5 31.0)"))
+| EVAL dist_km = dist_m / 1000.0
+| WHERE dist_km > 100.0
+| LOOKUP JOIN supplier-sla-scores ON location_id
+| EVAL sla_match = COALESCE(sla_score, 0.5)
+| EVAL attn_numerator = (reliability_index * sla_match) / SQRT(dist_km)
+| SORT attn_numerator DESC
+| LIMIT 20
+| KEEP location_id, name, coordinates, reliability_index, sla_match,
+       dist_km, avg_lead_time_hours, inventory_value_usd, attn_numerator
+
+;
+
+// ── Query 3: Full Attention Score Computation ───────────────────────────────
+// After Query 2 returns candidates, the Python layer fetches Mapbox
+// drive times and computes the final score. This ES|QL query pre-stages
+// all the structured data needed for the formula.
+//
+// The Python code then computes:
+//   raw_scores = [ (Reliability_i * SLA_i) / sqrt(dist_km_i)  for each i ]
+//   softmax_weights = softmax(raw_scores)
+//   A_i = softmax_weights[i] * (1 / drive_time_hours_i)
+//
+// This query provides the inputs for that computation.
+
+FROM erp-locations METADATA _id
+| WHERE type == "supplier" AND active == true
+| EVAL dist_m = ST_DISTANCE(coordinates, TO_GEOPOINT("POINT(-94.5 31.0)"))
+| EVAL dist_km = dist_m / 1000.0
+| WHERE dist_km > 100.0
+| LOOKUP JOIN supplier-sla-scores ON location_id
+| EVAL sla_match = COALESCE(sla_score, 0.5)
+| EVAL attn_numerator = (reliability_index * sla_match) / SQRT(dist_km)
+| EVAL est_drive_hours = (dist_km * 1.3) / 80.0
+| EVAL est_attention = attn_numerator / est_drive_hours
+| SORT est_attention DESC
+| LIMIT 10
+| KEEP location_id, name, coordinates, reliability_index, sla_match,
+       dist_km, attn_numerator, est_drive_hours, est_attention,
+       avg_lead_time_hours, inventory_value_usd, capacity_units
+
+;
+
+// ── Query 4: Historical Performance Cross-Reference ─────────────────────────
+// For each candidate supplier, pull their recent delivery performance
+// from supply-latency-logs to feed Agent 3's reflection loop.
+
+FROM supply-latency-logs
+| WHERE @timestamp >= NOW() - 90 DAYS
+| STATS
+    total_shipments = COUNT(*),
+    on_time_count   = SUM(CASE(on_time == true, 1, 0)),
+    avg_delay       = AVG(delay_hours),
+    max_delay       = MAX(delay_hours),
+    avg_cost        = AVG(cost_usd),
+    total_value     = SUM(shipment_value_usd)
+  BY supplier_id
+| EVAL on_time_pct = (on_time_count * 100.0) / total_shipments
+| EVAL performance_grade = CASE(
+    on_time_pct >= 95.0, "A",
+    on_time_pct >= 85.0, "B",
+    on_time_pct >= 70.0, "C",
+    "D"
+  )
+| SORT on_time_pct DESC
+| LIMIT 30
+| KEEP supplier_id, total_shipments, on_time_pct, avg_delay, max_delay,
+       avg_cost, total_value, performance_grade
+
+;
+
+// ── Query 5: Supplier SLA Enrich Policy Seed ────────────────────────────────
+// This query is used to populate the "supplier-sla-scores" lookup index
+// that powers the LOOKUP JOIN above. It is run periodically after the
+// kNN semantic search produces updated scores.
+
+FROM erp-locations METADATA _id
+| WHERE type == "supplier" AND active == true
+| KEEP location_id, name, reliability_index, contract_sla
+| LIMIT 500
