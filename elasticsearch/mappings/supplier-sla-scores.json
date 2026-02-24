@@ -1,0 +1,36 @@
+{
+  "settings": {
+    "index": {
+      "mode":               "lookup",
+      "number_of_shards":   1,
+      "number_of_replicas": 0
+    }
+  },
+  "mappings": {
+    "properties": {
+      "location_id": {
+        "type": "keyword",
+        "meta": { "description": "Join key — matches erp-locations.location_id." }
+      },
+      "sla_score": {
+        "type":  "float",
+        "meta":  { "description": "Normalised SLA compatibility score [0, 1]. Blend of kNN/BM25/proxy." }
+      },
+      "sla_tier": {
+        "type": "keyword",
+        "meta": { "description": "platinum ≥0.80 | gold ≥0.60 | silver ≥0.40 | bronze <0.40" }
+      },
+      "sla_method": {
+        "type": "keyword",
+        "meta": { "description": "Score source: knn | bm25 | proxy" }
+      },
+      "computed_at": {
+        "type": "date"
+      },
+      "@timestamp": {
+        "type": "date",
+        "meta": { "description": "Alias of computed_at — used by Kibana Data Views." }
+      }
+    }
+  }
+}

@@ -24,16 +24,18 @@ from app.services.mapbox import get_route
 
 logger = logging.getLogger("aegis.agent.procurement")
 
-# ES|QL: LOOKUP JOIN merging semantic SLA scores with reliability metrics,
-# filtered by ST_DISTANCE from threat centroid (exclude within 100km)
+# ES|QL: LOOKUP JOIN merging precomputed SLA scores with reliability metrics,
+# filtered by ST_DISTANCE from threat centroid (exclude within 100km).
+# Requires supplier-sla-scores to be populated by compute_sla_scores.py.
 PROCUREMENT_ESQL = """FROM erp-locations
 | WHERE type == "supplier" AND active == true
 | EVAL dist_km = ST_DISTANCE(coordinates, TO_GEOPOINT(?)) / 1000.0
 | WHERE dist_km > 100.0
+| LOOKUP JOIN `supplier-sla-scores` ON location_id
 | SORT reliability_index DESC
 | LIMIT 20
 | KEEP location_id, name, coordinates, reliability_index, avg_lead_time_hours,
-       contract_sla, inventory_value_usd, dist_km"""
+       contract_sla, inventory_value_usd, dist_km, sla_score, sla_tier"""
 
 
 def _softmax(scores: list[float]) -> list[float]:
@@ -101,38 +103,58 @@ async def run_procurement_cycle(
         logger.warning("No candidate suppliers found outside 100km exclusion zone")
         return proposals
 
-    # ── Step 2: Semantic SLA search (kNN on dense vector) ────────────
+    # ── Step 2: SLA scores — lookup index first, kNN as fallback ────────
     sla_scores: dict[str, float] = {}
     try:
-        knn_resp = es.search(
-            index="erp-locations",
+        candidate_ids = [c["location_id"] for c in candidates]
+        lookup_resp = es.search(
+            index="supplier-sla-scores",
             body={
-                "size": 20,
-                "knn": {
-                    "field": "contract_sla_vector",
-                    "query_vector_builder": {
-                        "text_embedding": {
-                            "model_id": ".multilingual-e5-small",
-                            "model_text": sla_query_text,
-                        }
-                    },
-                    "k": 20,
-                    "num_candidates": 50,
-                },
-                "_source": ["location_id"],
+                "size": len(candidate_ids),
+                "query": {"terms": {"location_id": candidate_ids}},
+                "_source": ["location_id", "sla_score"],
             },
         )
-        for hit in knn_resp["hits"]["hits"]:
-            loc_id = hit["_source"]["location_id"]
-            sla_scores[loc_id] = hit["_score"]
+        for hit in lookup_resp["hits"]["hits"]:
+            src = hit["_source"]
+            sla_scores[src["location_id"]] = src.get("sla_score", 0.5)
+        logger.debug(
+            "Loaded %d precomputed SLA scores from supplier-sla-scores", len(sla_scores)
+        )
     except Exception as exc:
-        logger.warning("kNN SLA search failed (proceeding without): %s", exc)
-
-    # Normalize SLA scores to [0, 1]
-    if sla_scores:
-        max_sla = max(sla_scores.values())
-        if max_sla > 0:
-            sla_scores = {k: v / max_sla for k, v in sla_scores.items()}
+        logger.warning(
+            "supplier-sla-scores lookup failed — falling back to kNN. Reason: %s", exc
+        )
+        # kNN fallback: requires .multilingual-e5-small inference endpoint
+        try:
+            knn_resp = es.search(
+                index="erp-locations",
+                body={
+                    "size": 20,
+                    "knn": {
+                        "field": "contract_sla_vector",
+                        "query_vector_builder": {
+                            "text_embedding": {
+                                "model_id": ".multilingual-e5-small",
+                                "model_text": sla_query_text,
+                            }
+                        },
+                        "k": 20,
+                        "num_candidates": 50,
+                    },
+                    "_source": ["location_id"],
+                },
+            )
+            for hit in knn_resp["hits"]["hits"]:
+                loc_id = hit["_source"]["location_id"]
+                sla_scores[loc_id] = hit["_score"]
+            # kNN returns raw cosine scores — normalise to [0, 1]
+            if sla_scores:
+                max_sla = max(sla_scores.values())
+                if max_sla > 0:
+                    sla_scores = {k: v / max_sla for k, v in sla_scores.items()}
+        except Exception as exc2:
+            logger.warning("kNN SLA fallback also failed: %s", exc2)
 
     # ── Step 3: Mapbox drive times + Attention Score ─────────────────
     origin_coords = origin_location.get("coordinates", {})

@@ -1,73 +1,141 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Tactical Agritech Design Tokens ────────────────────────────────────────
+   Palette: stone-950 grounds / lime-400 supply lines / orange-red hazards.
+   No blues, no purples, no pill shapes.
+──────────────────────────────────────────────────────────────────────────── */
 :root {
-  --bg-primary: #0a0e17;
-  --bg-secondary: #111827;
-  --bg-panel: #1a1f2e;
-  --bg-input: #0f1420;
-  --border: #2a3040;
-  --border-active: #3b82f6;
-  --text-primary: #e2e8f0;
-  --text-secondary: #94a3b8;
-  --text-muted: #64748b;
-  --accent-blue: #3b82f6;
-  --accent-cyan: #06b6d4;
-  --accent-red: #ef4444;
-  --accent-amber: #f59e0b;
-  --accent-green: #22c55e;
-  --accent-purple: #8b5cf6;
-  --shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+  --bg-screen:  #0c0a09; /* stone-950 — primary viewport */
+  --bg-panel:   #1c1917; /* stone-900 — sidebar / chat panels */
+  --bg-surface: #292524; /* stone-800 — rows, hover states */
+  --bg-canopy:  #022c22; /* emerald-950 — key data surfaces */
+  --bg-input:   #1c1917;
+
+  --border-hi:  #44403c; /* stone-700 */
+  --border-lo:  #292524; /* stone-800 */
+
+  --text-hi:    #e7e5e4; /* stone-200 */
+  --text-mid:   #a8a29e; /* stone-400 */
+  --text-lo:    #78716c; /* stone-500 */
+  --text-dim:   #57534e; /* stone-600 */
+
+  --lime:       #a3e635; /* lime-400 — healthy routes / success */
+  --lime-dim:   #84cc16; /* lime-500 */
+
+  --haz-ext:    #dc2626; /* red-600   — extreme */
+  --haz-sev:    #ea580c; /* orange-600 — severe */
+  --haz-mod:    #d97706; /* amber-600  — moderate */
+  --haz-min:    #ca8a04; /* yellow-600 — minor */
+  --haz-unk:    #78716c; /* stone-500  — unknown */
+
+  --hitl:       #f59e0b; /* amber-500 — HITL pending */
 }
 
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
-}
+/* ── Reset ───────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 html, body {
   height: 100%;
-  background: var(--bg-primary);
-  color: var(--text-primary);
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   overflow: hidden;
+  background: var(--bg-screen);
+  color: var(--text-hi);
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  overscroll-behavior: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
-/* Mapbox overrides for dark mode */
+/* Allow text selection only where the user needs to copy data */
+input, textarea, pre, code, [data-selectable] {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* ── Scrollbars — tight, no track ───────────────────────────────────────── */
+::-webkit-scrollbar       { width: 3px; height: 3px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-hi); }
+::-webkit-scrollbar-thumb:hover { background: var(--text-lo); }
+
+/* ── Mapbox — stone palette overrides ───────────────────────────────────── */
 .mapboxgl-popup-content {
-  background: var(--bg-panel) !important;
-  color: var(--text-primary) !important;
-  border: 1px solid var(--border) !important;
-  border-radius: 8px !important;
-  padding: 12px 16px !important;
-  box-shadow: var(--shadow) !important;
+  background: var(--bg-canopy) !important;
+  color: var(--text-hi) !important;
+  border: 1px solid var(--border-hi) !important;
+  border-radius: 2px !important;
+  padding: 8px 12px !important;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.7) !important;
+  font-family: "JetBrains Mono", monospace !important;
+  font-size: 11px !important;
+  line-height: 1.7 !important;
+}
+.mapboxgl-popup-tip     { border-top-color: var(--bg-canopy) !important; }
+.mapboxgl-ctrl-group    { background: var(--bg-panel) !important; border: 1px solid var(--border-lo) !important; border-radius: 2px !important; }
+.mapboxgl-ctrl-group button { filter: invert(0.65) sepia(0.2) hue-rotate(55deg); }
+.mapboxgl-ctrl-group button + button { border-top: 1px solid var(--border-lo) !important; }
+.mapboxgl-ctrl-attrib   { background: rgba(12,10,9,0.88) !important; color: var(--text-dim) !important; font-size: 9px !important; }
+.mapboxgl-ctrl-attrib a { color: var(--text-lo) !important; }
+
+/* ── Animations ──────────────────────────────────────────────────────────── */
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+@keyframes dot-flash {
+  0%, 80%, 100% { opacity: 0.2; transform: scale(0.8); }
+  40%           { opacity: 1;   transform: scale(1); }
 }
 
-.mapboxgl-popup-tip {
-  border-top-color: var(--bg-panel) !important;
+.cursor-blink::after {
+  content: "█";
+  color: var(--lime);
+  font-size: 0.7em;
+  animation: blink 1s step-end infinite;
 }
 
-.mapboxgl-ctrl-group {
-  background: var(--bg-panel) !important;
-  border: 1px solid var(--border) !important;
-}
+/* ── Shared component classes ────────────────────────────────────────────── */
+@layer components {
+  /* Label above data values */
+  .tac-label {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-lo);
+  }
 
-.mapboxgl-ctrl-group button {
-  filter: invert(1);
-}
+  /* Monospace data value */
+  .tac-value {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px;
+    color: var(--lime);
+  }
 
-/* Scrollbar */
-::-webkit-scrollbar {
-  width: 6px;
-}
+  /* Horizontal rule */
+  .tac-divider { @apply w-full border-t border-stone-800; }
 
-::-webkit-scrollbar-track {
-  background: var(--bg-primary);
-}
+  /* Generic tactical button */
+  .tac-btn {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    @apply inline-flex items-center gap-1.5
+           bg-stone-800 hover:bg-stone-700 active:bg-stone-900
+           border border-stone-700 hover:border-stone-600
+           text-stone-300 hover:text-stone-100
+           px-3 py-1.5 transition-colors duration-75
+           cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed;
+    border-radius: 2px;
+  }
 
-::-webkit-scrollbar-thumb {
-  background: var(--border);
-  border-radius: 3px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: var(--text-muted);
+  .tac-btn-lime {
+    @apply tac-btn text-lime-400
+           bg-transparent border-lime-900
+           hover:bg-lime-950 hover:border-lime-700;
+  }
 }

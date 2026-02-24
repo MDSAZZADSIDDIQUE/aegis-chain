@@ -3,9 +3,8 @@
     "index": {
       "mode": "time_series",
       "routing_path": ["location_id", "supplier_id"],
-      "time_series": {
-        "start_time": "2024-01-01T00:00:00Z",
-        "end_time": "2027-01-01T00:00:00Z"
+      "lifecycle": {
+        "name": "supply-latency-logs-ilm"
       }
     }
   },

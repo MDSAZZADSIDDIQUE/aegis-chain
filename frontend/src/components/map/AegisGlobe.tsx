@@ -2,21 +2,24 @@
 
 import { useEffect, useRef, useCallback } from "react";
 import mapboxgl from "mapbox-gl";
+import * as turf from "@turf/turf";
 import type { WeatherThreat, ERPLocation, Proposal } from "@/lib/api";
 
+// Hazard palette — orange/red, no blues or purples
 const SEVERITY_COLORS: Record<string, string> = {
-  extreme: "#ef4444",
-  severe: "#f97316",
-  moderate: "#f59e0b",
-  minor: "#3b82f6",
-  unknown: "#8b5cf6",
+  extreme:  "#dc2626", // red-600
+  severe:   "#ea580c", // orange-600
+  moderate: "#d97706", // amber-600
+  minor:    "#ca8a04", // yellow-600
+  unknown:  "#78716c", // stone-500
 };
 
+// Location type → bio-lime / canopy palette
 const LOCATION_COLORS: Record<string, string> = {
-  warehouse: "#3b82f6",
-  supplier: "#22c55e",
-  distribution_center: "#06b6d4",
-  port: "#8b5cf6",
+  warehouse:           "#4ade80", // green-400
+  supplier:            "#a3e635", // lime-400
+  distribution_center: "#34d399", // emerald-400
+  port:                "#86efac", // green-300
 };
 
 interface AegisGlobeProps {
@@ -24,6 +27,7 @@ interface AegisGlobeProps {
   locations: ERPLocation[];
   routes: Proposal[];
   highlightedEntities: string[];
+  selectedThreatId?: string;
   onLocationClick?: (location: ERPLocation) => void;
   onThreatClick?: (threat: WeatherThreat) => void;
 }
@@ -33,6 +37,7 @@ export default function AegisGlobe({
   locations,
   routes,
   highlightedEntities,
+  selectedThreatId,
   onLocationClick,
   onThreatClick,
 }: AegisGlobeProps) {
@@ -49,23 +54,24 @@ export default function AegisGlobe({
 
     const map = new mapboxgl.Map({
       container: containerRef.current,
-      style: "mapbox://styles/mapbox/dark-v11",
+      // Satellite-streets hybrid: actual agricultural land imagery + road network
+      style: "mapbox://styles/mapbox/satellite-streets-v12",
       projection: "globe",
       center: [-98, 38],
       zoom: 3.5,
-      pitch: 30,
-      bearing: -10,
+      pitch: 25,
+      bearing: -8,
       antialias: true,
     });
 
     map.on("style.load", () => {
-      // Atmosphere / fog for globe effect
+      // Atmosphere — earthy, deep-field agricultural night sky
       map.setFog({
-        color: "rgb(10, 14, 23)",
-        "high-color": "rgb(20, 30, 60)",
-        "horizon-blend": 0.08,
-        "space-color": "rgb(5, 5, 15)",
-        "star-intensity": 0.4,
+        color: "rgb(12, 10, 9)",          // stone-950 horizon haze
+        "high-color": "rgb(10, 30, 18)",  // deep canopy green upper atmosphere
+        "horizon-blend": 0.06,
+        "space-color": "rgb(4, 4, 4)",    // near-black space
+        "star-intensity": 0.65,           // visible stars over agricultural fields at night
       });
 
       // ── Threat polygon layer ────────────────────────────────────
@@ -80,7 +86,11 @@ export default function AegisGlobe({
         source: "threats",
         paint: {
           "fill-color": ["get", "color"],
-          "fill-opacity": 0.25,
+          "fill-opacity": [
+            "case",
+            ["==", ["get", "threat_id"], selectedThreatId || ""], 0.6,
+            0.25
+          ],
         },
       });
 
@@ -90,7 +100,11 @@ export default function AegisGlobe({
         source: "threats",
         paint: {
           "line-color": ["get", "color"],
-          "line-width": 2,
+          "line-width": [
+            "case",
+            ["==", ["get", "threat_id"], selectedThreatId || ""], 4,
+            2
+          ],
           "line-opacity": 0.8,
           "line-dasharray": [2, 2],
         },
@@ -109,11 +123,15 @@ export default function AegisGlobe({
         paint: {
           "circle-radius": [
             "interpolate", ["linear"], ["zoom"],
-            3, 8,
-            8, 16,
+            3, ["case", ["==", ["get", "threat_id"], selectedThreatId || ""], 12, 8],
+            8, ["case", ["==", ["get", "threat_id"], selectedThreatId || ""], 24, 16],
           ],
           "circle-color": ["get", "color"],
-          "circle-opacity": 0.6,
+          "circle-opacity": [
+            "case",
+            ["==", ["get", "threat_id"], selectedThreatId || ""], 0.9,
+            0.6
+          ],
           "circle-stroke-width": 2,
           "circle-stroke-color": ["get", "color"],
           "circle-stroke-opacity": 0.9,
@@ -187,12 +205,12 @@ export default function AegisGlobe({
         paint: {
           "line-color": [
             "case",
-            ["==", ["get", "status"], "approved"], "#22c55e",
-            ["==", ["get", "status"], "awaiting_approval"], "#f59e0b",
-            "#3b82f6",
+            ["==", ["get", "status"], "approved"],          "#a3e635", // lime-400
+            ["==", ["get", "status"], "awaiting_approval"], "#f59e0b", // amber-500
+            "#84cc16", // lime-500 default
           ],
-          "line-width": 3,
-          "line-opacity": 0.85,
+          "line-width": 2.5,
+          "line-opacity": 0.9,
         },
       });
 
@@ -209,7 +227,7 @@ export default function AegisGlobe({
           "text-rotation-alignment": "map",
         },
         paint: {
-          "text-color": "#22c55e",
+          "text-color": "#a3e635", // lime-400 arrows
         },
       });
 
@@ -257,11 +275,21 @@ export default function AegisGlobe({
         popup
           .setLngLat(coords)
           .setHTML(
-            `<div style="font-family:Inter,sans-serif;font-size:13px;">
-              <strong>${p.name}</strong><br/>
-              <span style="color:#94a3b8">Type:</span> ${p.type}<br/>
-              <span style="color:#94a3b8">Reliability:</span> ${Number(p.reliability_index).toFixed(3)}<br/>
-              <span style="color:#94a3b8">Value:</span> $${Number(p.inventory_value_usd).toLocaleString()}
+            `<div style="font-family:'JetBrains Mono',monospace;font-size:10px;line-height:1.8;min-width:180px;">
+              <div style="font-size:11px;font-weight:700;color:#e7e5e4;margin-bottom:6px;letter-spacing:0.02em;">
+                ${p.name}
+              </div>
+              <div style="color:#78716c;font-size:9px;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:4px;">
+                ${(p.type as string).replace("_"," ")}
+              </div>
+              <div style="display:grid;grid-template-columns:auto 1fr;gap:2px 8px;">
+                <span style="color:#78716c;font-size:9px;">RELIABILITY</span>
+                <span style="color:#a3e635;">${Number(p.reliability_index).toFixed(3)}</span>
+                <span style="color:#78716c;font-size:9px;">INV VALUE</span>
+                <span style="color:#a3e635;">$${Number(p.inventory_value_usd).toLocaleString()}</span>
+                <span style="color:#78716c;font-size:9px;">LEAD TIME</span>
+                <span style="color:#a3e635;">${Number(p.avg_lead_time_hours ?? 0).toFixed(1)}h</span>
+              </div>
             </div>`
           )
           .addTo(map);
@@ -337,6 +365,7 @@ export default function AegisGlobe({
         type: loc.type,
         reliability_index: loc.reliability_index,
         inventory_value_usd: loc.inventory_value_usd,
+        avg_lead_time_hours: loc.avg_lead_time_hours,
         color: LOCATION_COLORS[loc.type] || "#6b7280",
         highlighted: highlightedEntities.includes(loc.location_id) || highlightedEntities.includes(loc.name),
       },
@@ -357,32 +386,38 @@ export default function AegisGlobe({
     const source = map.getSource("routes") as mapboxgl.GeoJSONSource;
     if (!source) return;
 
-    // For routes without Mapbox geometry, draw straight lines between
-    // origin and destination locations
     const features: GeoJSON.Feature[] = [];
 
     for (const route of routes) {
       const origin = locations.find((l) => l.location_id === route.original_supplier_id);
-      const dest = locations.find((l) => l.location_id === route.proposed_supplier_id);
+      const dest   = locations.find((l) => l.location_id === route.proposed_supplier_id);
+      if (!origin || !dest) continue;
 
-      if (origin && dest) {
-        features.push({
-          type: "Feature",
-          properties: {
-            proposal_id: route.proposal_id,
-            status: route.hitl_status || "pending",
-            cost: route.reroute_cost_usd,
-            attention_score: route.attention_score,
-          },
-          geometry: {
-            type: "LineString",
-            coordinates: [
-              [origin.coordinates.lon, origin.coordinates.lat],
-              [dest.coordinates.lon, dest.coordinates.lat],
-            ],
-          },
-        });
+      // Prefer the real Mapbox road geometry stored on the proposal.
+      // Fall back to a turf great-circle arc which looks far better than a
+      // two-point straight line on a 3-D globe projection.
+      let lineGeometry: GeoJSON.Geometry;
+      if (route.route_geometry) {
+        lineGeometry = route.route_geometry;
+      } else {
+        const arc = turf.greatCircle(
+          turf.point([origin.coordinates.lon, origin.coordinates.lat]),
+          turf.point([dest.coordinates.lon,   dest.coordinates.lat]),
+          { npoints: 100 },
+        );
+        lineGeometry = arc.geometry;
       }
+
+      features.push({
+        type: "Feature",
+        properties: {
+          proposal_id:    route.proposal_id,
+          status:         route.hitl_status || "pending",
+          cost:           route.reroute_cost_usd,
+          attention_score: route.attention_score,
+        },
+        geometry: lineGeometry,
+      });
     }
 
     source.setData({ type: "FeatureCollection", features });
@@ -404,7 +439,38 @@ export default function AegisGlobe({
         updateRoutes();
       });
     }
-  }, [updateThreats, updateLocations, updateRoutes]);
+  }, [updateThreats, updateLocations, updateRoutes, selectedThreatId]);
+
+  // ── Make sure painting reacts to selectedThreatId changes ─────
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !map.isStyleLoaded()) return;
+
+    map.setPaintProperty("threat-fills", "fill-opacity", [
+      "case",
+      ["==", ["get", "threat_id"], selectedThreatId || ""], 0.6,
+      0.25
+    ]);
+
+    map.setPaintProperty("threat-borders", "line-width", [
+      "case",
+      ["==", ["get", "threat_id"], selectedThreatId || ""], 4,
+      2
+    ]);
+
+    map.setPaintProperty("threat-pulse", "circle-radius", [
+      "interpolate", ["linear"], ["zoom"],
+      3, ["case", ["==", ["get", "threat_id"], selectedThreatId || ""], 12, 8],
+      8, ["case", ["==", ["get", "threat_id"], selectedThreatId || ""], 24, 16],
+    ]);
+    
+    map.setPaintProperty("threat-pulse", "circle-opacity", [
+      "case",
+      ["==", ["get", "threat_id"], selectedThreatId || ""], 0.9,
+      0.6
+    ]);
+
+  }, [selectedThreatId]);
 
   return (
     <div

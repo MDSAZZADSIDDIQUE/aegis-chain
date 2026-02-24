@@ -1,0 +1,39 @@
+{
+  "policy": {
+    "_meta": {
+      "description": "ILM policy for supply-latency-logs TSDS data stream. Hot-rolls monthly (or at 50 GB), force-merges in warm, deletes after 2 years.",
+      "managed_by": "aegis-chain/elastic.py:ensure_indices"
+    },
+    "phases": {
+      "hot": {
+        "min_age": "0ms",
+        "actions": {
+          "rollover": {
+            "max_age": "30d",
+            "max_primary_shard_size": "50gb"
+          },
+          "set_priority": {
+            "priority": 100
+          }
+        }
+      },
+      "warm": {
+        "min_age": "30d",
+        "actions": {
+          "forcemerge": {
+            "max_num_segments": 1
+          },
+          "set_priority": {
+            "priority": 50
+          }
+        }
+      },
+      "delete": {
+        "min_age": "730d",
+        "actions": {
+          "delete": {}
+        }
+      }
+    }
+  }
+}

@@ -3,15 +3,22 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
+from app.core.security import verify_api_key
 from app.services.noaa import fetch_noaa_alerts
 from app.services.nasa_firms import fetch_firms_fires
 from app.services.indexer import index_threats, expire_old_threats
+from app.core.events import broadcast
 
 logger = logging.getLogger("aegis.api.ingest")
-router = APIRouter(prefix="/ingest", tags=["ingestion"])
+router = APIRouter(
+    prefix="/ingest",
+    tags=["ingestion"],
+    dependencies=[Depends(verify_api_key)],
+)
 
 
 @router.post("/poll")
@@ -25,11 +32,17 @@ async def trigger_poll():
     all_threats = noaa_threats + firms_threats
     indexed = index_threats(all_threats)
 
-    return {
+    result = {
         "noaa_alerts": len(noaa_threats),
         "firms_clusters": len(firms_threats),
         "indexed": indexed,
     }
+    await broadcast("ingest_complete", {
+        **result,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "source": "manual",
+    })
+    return result
 
 
 @router.get("/status")

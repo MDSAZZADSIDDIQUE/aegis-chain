@@ -103,10 +103,7 @@ async def fetch_noaa_alerts() -> list[dict[str, Any]]:
                 affected_zone = geom
             else:
                 # Fetch geometry from affected zone URLs
-                zone_urls = [
-                    f"https://api.weather.gov/zones/forecast/{z}"
-                    for z in (props.get("affectedZones") or [])
-                ]
+                zone_urls = props.get("affectedZones") or []
                 zone_geoms = []
                 for url in zone_urls[:5]:  # cap to avoid too many requests
                     zg = await _fetch_zone_geometry(url, client)

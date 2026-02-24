@@ -1,0 +1,88 @@
+{
+  "index_patterns": ["supply-latency-logs*"],
+  "data_stream": {},
+  "priority": 200,
+  "_meta": {
+    "description": "Composable template for supply-latency-logs TSDS data stream. Applies the supply-latency-logs-ilm ILM policy and TSDS routing. ES manages time-series backing index time boundaries automatically on each rollover — no hard-coded end_time needed.",
+    "managed_by": "aegis-chain/elastic.py:ensure_indices"
+  },
+  "template": {
+    "settings": {
+      "index": {
+        "mode": "time_series",
+        "routing_path": ["location_id", "supplier_id"],
+        "lifecycle": {
+          "name": "supply-latency-logs-ilm"
+        }
+      }
+    },
+    "mappings": {
+      "properties": {
+        "@timestamp": {
+          "type": "date"
+        },
+        "location_id": {
+          "type": "keyword",
+          "time_series_dimension": true
+        },
+        "supplier_id": {
+          "type": "keyword",
+          "time_series_dimension": true
+        },
+        "route_id": {
+          "type": "keyword"
+        },
+        "origin": {
+          "type": "geo_point"
+        },
+        "destination": {
+          "type": "geo_point"
+        },
+        "expected_transit_hours": {
+          "type": "float",
+          "time_series_metric": "gauge"
+        },
+        "actual_transit_hours": {
+          "type": "float",
+          "time_series_metric": "gauge"
+        },
+        "delay_hours": {
+          "type": "float",
+          "time_series_metric": "gauge"
+        },
+        "shipment_value_usd": {
+          "type": "double",
+          "time_series_metric": "gauge"
+        },
+        "disruption_cause": {
+          "type": "keyword",
+          "meta": {
+            "description": "weather | traffic | customs | mechanical | none"
+          }
+        },
+        "weather_threat_id": {
+          "type": "keyword",
+          "meta": {
+            "description": "FK to weather-threats.threat_id for weather-caused delays"
+          }
+        },
+        "transport_mode": {
+          "type": "keyword",
+          "meta": {
+            "description": "truck | rail | sea | air"
+          }
+        },
+        "carrier": {
+          "type": "keyword"
+        },
+        "cost_usd": {
+          "type": "double",
+          "time_series_metric": "gauge"
+        },
+        "on_time": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

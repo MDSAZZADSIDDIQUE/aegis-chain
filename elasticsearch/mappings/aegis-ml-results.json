@@ -1,0 +1,94 @@
+{
+  "settings": {
+    "number_of_shards":   1,
+    "number_of_replicas": 0
+  },
+  "mappings": {
+    "dynamic": true,
+    "properties": {
+      "@timestamp": {
+        "type": "date",
+        "meta": { "description": "Alias for timestamp — used by Kibana Data Views." }
+      },
+      "timestamp": {
+        "type": "date",
+        "meta": { "description": "Anomaly bucket/record timestamp from the ML job." }
+      },
+      "job_id": {
+        "type": "keyword",
+        "meta": { "description": "Elasticsearch ML job ID that produced this result." }
+      },
+      "result_type": {
+        "type": "keyword",
+        "meta": { "description": "record | bucket | influencer" }
+      },
+      "anomaly_score": {
+        "type":  "float",
+        "meta":  { "description": "Bucket-level normalised anomaly score 0–100." }
+      },
+      "record_score": {
+        "type":  "float",
+        "meta":  { "description": "Record-level normalised anomaly score 0–100." }
+      },
+      "initial_record_score": {
+        "type": "float"
+      },
+      "probability": {
+        "type": "double",
+        "meta": { "description": "Raw probability of observing this value under the model." }
+      },
+      "function": {
+        "type": "keyword",
+        "meta": { "description": "ML detector function e.g. high_mean, low_count, time_of_day." }
+      },
+      "function_description": {
+        "type": "text"
+      },
+      "detector_index": {
+        "type": "integer"
+      },
+      "by_field_name": {
+        "type": "keyword"
+      },
+      "by_field_value": {
+        "type": "keyword",
+        "meta": { "description": "Entity value for by-field analysis — typically supplier_id or location_id." }
+      },
+      "over_field_name": {
+        "type": "keyword"
+      },
+      "over_field_value": {
+        "type": "keyword"
+      },
+      "partition_field_name": {
+        "type": "keyword"
+      },
+      "partition_field_value": {
+        "type": "keyword"
+      },
+      "supplier_id": {
+        "type": "keyword",
+        "meta": { "description": "Explicit join key to erp-locations.location_id for supplier entities." }
+      },
+      "location_id": {
+        "type": "keyword",
+        "meta": { "description": "Explicit join key to erp-locations.location_id for warehouse/DC entities." }
+      },
+      "actual": {
+        "type": "double",
+        "meta": { "description": "Observed value(s) for the anomalous bucket." }
+      },
+      "typical": {
+        "type": "double",
+        "meta": { "description": "Model baseline value(s) for the anomalous bucket." }
+      },
+      "bucket_span": {
+        "type": "long",
+        "meta": { "description": "ML job bucket span in seconds." }
+      },
+      "is_interim": {
+        "type": "boolean"
+      }
+    }
+  }
+}

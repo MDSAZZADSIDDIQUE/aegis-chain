@@ -31,6 +31,14 @@ class Settings(BaseSettings):
     slack_webhook_url: str = ""
     slack_signing_secret: str = ""
 
+    # Anthropic
+    anthropic_api_key: str = ""
+
+    # AegisChain API authentication
+    # Set to a non-empty secret to enable X-AegisChain-Key header validation.
+    # Leave empty to disable auth (development / local mode).
+    aegis_api_key: str = ""
+
     # App
     hitl_cost_threshold_usd: float = 50_000.0
     poll_interval_seconds: int = 300

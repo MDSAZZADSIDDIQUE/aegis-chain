@@ -97,6 +97,31 @@ class RLUpdate(BaseModel):
     delivery_delay_hours: float = 0.0
 
 
+# ── ERP Location upsert ──────────────────────────────────────────────
+
+class ERPLocationUpsert(BaseModel):
+    name: str
+    type: str  # supplier | warehouse | distribution_center | port
+    lat: float = Field(..., ge=-90, le=90)
+    lon: float = Field(..., ge=-180, le=180)
+    location_id: str | None = None        # generated if absent
+    inventory_value_usd: float = Field(default=0.0, ge=0)
+    reliability_index: float = Field(default=0.85, ge=0.0, le=1.0)
+    avg_lead_time_hours: float = Field(default=24.0, ge=0)
+    contract_sla: str = ""
+    capacity_units: int | None = None
+    active: bool = True
+    tags: list[str] = Field(default_factory=list)
+    region: str = ""
+    country_code: str = ""
+    address: str = ""
+
+
+class ERPLocationCreated(BaseModel):
+    status: str           # "created" | "updated"
+    location_id: str
+
+
 # ── Chat-to-Map ──────────────────────────────────────────────────────
 
 class ChatQuery(BaseModel):

@@ -1,0 +1,85 @@
+{
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 0
+  },
+  "mappings": {
+    "properties": {
+      "@timestamp": {
+        "type": "date",
+        "meta": { "description": "Alias for created_at — used by Kibana Data Views." }
+      },
+      "proposal_id": {
+        "type": "keyword"
+      },
+      "threat_id": {
+        "type": "keyword"
+      },
+      "original_supplier_id": {
+        "type": "keyword"
+      },
+      "proposed_supplier_id": {
+        "type": "keyword"
+      },
+      "proposed_supplier_name": {
+        "type": "text",
+        "fields": { "keyword": { "type": "keyword" } }
+      },
+      "attention_score": {
+        "type": "float"
+      },
+      "mapbox_drive_time_minutes": {
+        "type": "float"
+      },
+      "mapbox_distance_km": {
+        "type": "float"
+      },
+      "reroute_cost_usd": {
+        "type": "double"
+      },
+      "route_geometry": {
+        "type": "geo_shape",
+        "meta": { "description": "GeoJSON LineString from Mapbox Directions API — null if routing failed." }
+      },
+      "rationale": {
+        "type": "text"
+      },
+      "hitl_status": {
+        "type": "keyword",
+        "meta": {
+          "description": "pending | awaiting_approval | auto_approved | approved | rejected"
+        }
+      },
+      "approved": {
+        "type": "boolean"
+      },
+      "approved_by": {
+        "type": "keyword"
+      },
+      "rejected_by": {
+        "type": "keyword"
+      },
+      "hitl_slack_sent": {
+        "type": "boolean"
+      },
+      "requires_hitl": {
+        "type": "boolean"
+      },
+      "confidence": {
+        "type": "float"
+      },
+      "rl_adjustment": {
+        "type": "float"
+      },
+      "audit_explanation": {
+        "type": "text"
+      },
+      "created_at": {
+        "type": "date"
+      },
+      "updated_at": {
+        "type": "date"
+      }
+    }
+  }
+}

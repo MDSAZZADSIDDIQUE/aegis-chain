@@ -2,20 +2,26 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
+from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 
 from app.core.config import settings
+from app.core.security import verify_api_key
 from app.core.elastic import get_es_client
 from app.models.schemas import (
     AuditVerdict,
     ChatQuery,
     ChatResponse,
     DashboardState,
+    ERPLocationCreated,
+    ERPLocationUpsert,
     MapboxRouteRequest,
     MapboxRouteResponse,
     RerouteProposal,
@@ -25,12 +31,30 @@ from app.models.schemas import (
 from app.services.mapbox import get_route
 from app.services.slack import send_hitl_approval_request, verify_slack_signature
 from app.services.indexer import update_reliability_index
+from app.services.claude_chat import (
+    classify_intent,
+    explain_results,
+    ESQL_SUPPLIER_RANKING,
+    ESQL_SUPPLIER_RANKING_FALLBACK,
+    ESQL_RISK_ASSESSMENT,
+    ESQL_REROUTE_PROPOSALS,
+)
+from app.services.proposals import (
+    upsert_proposal,
+    get_proposal as _get_proposal,
+    update_proposal as _update_proposal,
+    list_proposals as _list_proposals,
+)
 
 logger = logging.getLogger("aegis.api.routes")
-router = APIRouter(tags=["core"])
 
-# ── In-memory proposal store (production: use Elasticsearch index) ────
-_proposals: dict[str, dict[str, Any]] = {}
+# All routes on this router require a valid X-AegisChain-Key header
+# (no-op when AEGIS_API_KEY is unset — dev mode).
+router = APIRouter(tags=["core"], dependencies=[Depends(verify_api_key)])
+
+# Slack interactive callbacks authenticate via HMAC request-signature instead;
+# they must NOT carry the AegisChain API key dependency.
+slack_router = APIRouter(tags=["core"])
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -54,41 +78,116 @@ async def compute_route(req: MapboxRouteRequest):
 
 
 # ─────────────────────────────────────────────────────────────────────
-# Reroute Proposals (Agent 2 → Agent 3 pipeline)
+# ERP Locations — operator node management
 # ─────────────────────────────────────────────────────────────────────
+
+@router.post("/erp-locations", response_model=ERPLocationCreated, status_code=201)
+async def upsert_erp_location(body: ERPLocationUpsert):
+    """Add or update an ERP node (supplier, warehouse, distribution centre, port).
+
+    If ``location_id`` is omitted a new node is created with a generated ID.
+    If ``location_id`` is provided the existing document is replaced (full upsert).
+    The document is immediately visible to the watcher and procurement agents.
+    """
+    es = get_es_client()
+
+    is_update = body.location_id is not None
+    location_id = body.location_id or f"erp-{uuid.uuid4().hex[:8]}"
+
+    doc: dict[str, Any] = {
+        "location_id": location_id,
+        "name": body.name,
+        "type": body.type,
+        "coordinates": {"lat": body.lat, "lon": body.lon},
+        "inventory_value_usd": body.inventory_value_usd,
+        "reliability_index": body.reliability_index,
+        "avg_lead_time_hours": body.avg_lead_time_hours,
+        "active": body.active,
+        "tags": body.tags,
+        "last_updated": datetime.now(timezone.utc).isoformat(),
+    }
+    if body.contract_sla:
+        doc["contract_sla"] = body.contract_sla
+    if body.capacity_units is not None:
+        doc["capacity_units"] = body.capacity_units
+    if body.region:
+        doc["region"] = body.region
+    if body.country_code:
+        doc["country_code"] = body.country_code
+    if body.address:
+        doc["address"] = body.address
+
+    es.index(
+        index="erp-locations",
+        id=location_id,
+        document=doc,
+        refresh="wait_for",
+    )
+    logger.info("ERP location %s %s", location_id, "updated" if is_update else "created")
+    return ERPLocationCreated(
+        status="updated" if is_update else "created",
+        location_id=location_id,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Reroute Proposals  (Agent 2 → Agent 3 pipeline)
+# ─────────────────────────────────────────────────────────────────────
+
 @router.post("/proposals")
 async def submit_proposal(proposal: RerouteProposal):
-    """Agent 2 submits a reroute proposal for Agent 3 review."""
-    _proposals[proposal.proposal_id] = proposal.model_dump()
-    logger.info("Proposal %s submitted", proposal.proposal_id)
+    """Agent 2 submits a reroute proposal for Agent 3 review.
+    Persists to aegis-proposals index; idempotent on proposal_id.
+    """
+    doc = {**proposal.model_dump(), "hitl_status": "pending"}
+    upsert_proposal(doc)
+    logger.info("Proposal %s submitted and persisted", proposal.proposal_id)
     return {"status": "received", "proposal_id": proposal.proposal_id}
 
 
 @router.get("/proposals")
-async def list_proposals():
-    return list(_proposals.values())
+async def list_proposals_endpoint(
+    status: str | None = Query(
+        None,
+        description="Filter by hitl_status: pending | awaiting_approval | "
+                    "auto_approved | approved | rejected",
+    ),
+    page: int = Query(1, ge=1, description="1-based page number"),
+    size: int = Query(50, ge=1, le=500, description="Documents per page"),
+):
+    """Paginated list of all proposals, optionally filtered by HITL status."""
+    statuses = [status] if status else None
+    proposals, total = _list_proposals(
+        statuses=statuses,
+        size=size,
+        from_=(page - 1) * size,
+    )
+    return {"proposals": proposals, "total": total, "page": page, "size": size}
 
 
 @router.get("/proposals/{proposal_id}")
-async def get_proposal(proposal_id: str):
-    if proposal_id not in _proposals:
+async def get_proposal_endpoint(proposal_id: str):
+    """Fetch a single proposal by its ID."""
+    doc = _get_proposal(proposal_id)
+    if doc is None:
         raise HTTPException(status_code=404, detail="Proposal not found")
-    return _proposals[proposal_id]
+    return doc
 
 
 # ─────────────────────────────────────────────────────────────────────
-# Audit Verdict (Agent 3)
+# Audit Verdict  (Agent 3)
 # ─────────────────────────────────────────────────────────────────────
+
 @router.post("/audit/verdict")
 async def submit_verdict(verdict: AuditVerdict):
-    """Agent 3 submits its audit verdict. Triggers auto-execute or HITL."""
-    if verdict.proposal_id not in _proposals:
+    """Agent 3 submits its audit verdict.  Triggers auto-execute or HITL.
+    Updates the aegis-proposals document in place.
+    """
+    proposal = _get_proposal(verdict.proposal_id)
+    if proposal is None:
         raise HTTPException(status_code=404, detail="Proposal not found")
 
-    proposal = _proposals[verdict.proposal_id]
-
     if verdict.requires_hitl:
-        # Cost exceeds threshold — send Slack approval request
         sent = await send_hitl_approval_request(
             proposal_id=verdict.proposal_id,
             threat_headline=proposal.get("rationale", "Supply chain threat"),
@@ -99,36 +198,48 @@ async def submit_verdict(verdict: AuditVerdict):
             drive_time_min=proposal["mapbox_drive_time_minutes"],
             rationale=verdict.explanation,
         )
-        proposal["hitl_status"] = "awaiting_approval"
-        proposal["hitl_slack_sent"] = sent
+        _update_proposal(verdict.proposal_id, {
+            "hitl_status":     "awaiting_approval",
+            "hitl_slack_sent": sent,
+            "requires_hitl":   True,
+            "confidence":      verdict.confidence,
+            "audit_explanation": verdict.explanation,
+        })
         return {
-            "status": "hitl_pending",
+            "status":  "hitl_pending",
             "slack_sent": sent,
-            "message": f"Cost ${verdict.cost_usd:,.2f} exceeds threshold. Slack approval requested.",
+            "message": f"Cost ${verdict.cost_usd:,.2f} exceeds threshold. "
+                       "Slack approval requested.",
         }
-    else:
-        # Auto-execute — cost is within threshold
-        proposal["hitl_status"] = "auto_approved"
-        proposal["approved"] = True
 
-        # Apply RL adjustment if specified
-        if verdict.rl_adjustment != 0:
-            _apply_rl_adjustment(
-                proposal["original_supplier_id"], -abs(verdict.rl_adjustment)
-            )
+    # Auto-execute — cost within threshold
+    _update_proposal(verdict.proposal_id, {
+        "hitl_status":     "auto_approved",
+        "approved":        True,
+        "requires_hitl":   False,
+        "confidence":      verdict.confidence,
+        "rl_adjustment":   verdict.rl_adjustment,
+        "audit_explanation": verdict.explanation,
+    })
 
-        return {
-            "status": "auto_executed",
-            "message": f"Cost ${verdict.cost_usd:,.2f} within threshold. Reroute auto-approved.",
-        }
+    if verdict.rl_adjustment != 0:
+        _apply_rl_adjustment(
+            proposal["original_supplier_id"], -abs(verdict.rl_adjustment)
+        )
+
+    return {
+        "status":  "auto_executed",
+        "message": f"Cost ${verdict.cost_usd:,.2f} within threshold. Reroute auto-approved.",
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────
 # Slack HITL Callback
 # ─────────────────────────────────────────────────────────────────────
-@router.post("/slack/actions")
+
+@slack_router.post("/slack/actions")
 async def slack_action_callback(request: Request):
-    """Handles Slack interactive button callbacks (Approve/Reject)."""
+    """Handles Slack interactive button callbacks (Approve / Reject)."""
     body = await request.body()
     timestamp = request.headers.get("X-Slack-Request-Timestamp", "")
     signature = request.headers.get("X-Slack-Signature", "")
@@ -145,35 +256,35 @@ async def slack_action_callback(request: Request):
     if not actions:
         raise HTTPException(status_code=400, detail="No actions in payload")
 
-    action = actions[0]
+    action    = actions[0]
     proposal_id = action.get("value", "")
-    action_id = action.get("action_id", "")
-    user = payload.get("user", {})
+    action_id   = action.get("action_id", "")
+    user        = payload.get("user", {})
 
-    if proposal_id not in _proposals:
+    proposal = _get_proposal(proposal_id)
+    if proposal is None:
         raise HTTPException(status_code=404, detail="Proposal not found")
 
-    proposal = _proposals[proposal_id]
-
     if action_id == "hitl_approve":
-        proposal["hitl_status"] = "approved"
-        proposal["approved"] = True
-        proposal["approved_by"] = user.get("username", "unknown")
+        _update_proposal(proposal_id, {
+            "hitl_status": "approved",
+            "approved":    True,
+            "approved_by": user.get("username", "unknown"),
+        })
         logger.info("Proposal %s APPROVED by %s", proposal_id, user.get("username"))
-
         return {"response_type": "in_channel", "text": f"Reroute `{proposal_id}` APPROVED."}
 
-    elif action_id == "hitl_reject":
-        proposal["hitl_status"] = "rejected"
-        proposal["approved"] = False
-        proposal["rejected_by"] = user.get("username", "unknown")
+    if action_id == "hitl_reject":
+        _update_proposal(proposal_id, {
+            "hitl_status": "rejected",
+            "approved":    False,
+            "rejected_by": user.get("username", "unknown"),
+        })
         logger.info("Proposal %s REJECTED by %s", proposal_id, user.get("username"))
-
-        # Penalize the proposed supplier's reliability since it was rejected
+        # Penalise the proposed supplier that was rejected
         _apply_rl_adjustment(
             proposal["proposed_supplier_id"], -settings.rl_penalty_factor
         )
-
         return {"response_type": "in_channel", "text": f"Reroute `{proposal_id}` REJECTED."}
 
     raise HTTPException(status_code=400, detail=f"Unknown action: {action_id}")
@@ -182,12 +293,12 @@ async def slack_action_callback(request: Request):
 # ─────────────────────────────────────────────────────────────────────
 # Reinforcement Learning Weight Updates
 # ─────────────────────────────────────────────────────────────────────
+
 @router.post("/rl/update")
 async def rl_update(update: RLUpdate):
     """Feedback loop: update supplier reliability based on delivery outcome."""
     es = get_es_client()
 
-    # Fetch current reliability_index
     search_resp = es.search(
         index="erp-locations",
         body={"query": {"term": {"location_id": update.supplier_id}}, "size": 1},
@@ -201,7 +312,6 @@ async def rl_update(update: RLUpdate):
     if update.outcome == "success":
         delta = settings.rl_reward_factor
     else:
-        # Scale penalty by delay magnitude
         delay_factor = min(update.delivery_delay_hours / 24.0, 3.0)
         delta = -settings.rl_penalty_factor * (1 + delay_factor)
 
@@ -209,15 +319,15 @@ async def rl_update(update: RLUpdate):
     update_reliability_index(update.supplier_id, new_ri)
 
     return {
-        "supplier_id": update.supplier_id,
+        "supplier_id":          update.supplier_id,
         "previous_reliability": round(current_ri, 4),
-        "new_reliability": round(new_ri, 4),
-        "delta": round(delta, 4),
+        "new_reliability":      round(new_ri, 4),
+        "delta":                round(delta, 4),
     }
 
 
 def _apply_rl_adjustment(supplier_id: str, delta: float) -> None:
-    """Internal helper to adjust a supplier's reliability index."""
+    """Internal helper: adjust a supplier's reliability_index by delta."""
     es = get_es_client()
     try:
         resp = es.search(
@@ -234,14 +344,15 @@ def _apply_rl_adjustment(supplier_id: str, delta: float) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────
-# Dashboard State (consumed by Next.js frontend)
+# Dashboard State  (consumed by Next.js frontend)
 # ─────────────────────────────────────────────────────────────────────
+
 @router.get("/dashboard/state", response_model=DashboardState)
 async def dashboard_state():
     """Aggregate current system state for the frontend globe view."""
     es = get_es_client()
 
-    # Active threats
+    # Active weather threats
     threats_resp = es.search(
         index="weather-threats",
         body={
@@ -259,8 +370,7 @@ async def dashboard_state():
     )
     erp_locations = [h["_source"] for h in locs_resp["hits"]["hits"]]
 
-    # Total value at risk — locations that intersect active threats
-    # (simplified: sum all inventory in threat zones)
+    # Value at risk — sum inventory in threat zones
     value_at_risk = 0.0
     for threat in active_threats:
         zone = threat.get("affected_zone")
@@ -283,9 +393,7 @@ async def dashboard_state():
                         ]
                     }
                 },
-                "aggs": {
-                    "total_value": {"sum": {"field": "inventory_value_usd"}}
-                },
+                "aggs": {"total_value": {"sum": {"field": "inventory_value_usd"}}},
             },
         )
         value_at_risk += (
@@ -294,15 +402,21 @@ async def dashboard_state():
             .get("value", 0)
         )
 
-    # Active routes (pending/approved proposals)
-    active_routes = [
-        p for p in _proposals.values()
-        if p.get("hitl_status") in ("auto_approved", "approved", "awaiting_approval")
-    ]
-    pending = [
-        p for p in _proposals.values()
-        if p.get("hitl_status") in ("pending", "awaiting_approval")
-    ]
+    # Active routes — proposals that are visible on the map
+    active_routes, _ = _list_proposals(
+        statuses=["auto_approved", "approved", "awaiting_approval"],
+        size=200,
+        sort_by="created_at",
+        sort_order="desc",
+    )
+
+    # Pending — proposals awaiting human decision
+    pending, _ = _list_proposals(
+        statuses=["pending", "awaiting_approval"],
+        size=100,
+        sort_by="created_at",
+        sort_order="desc",
+    )
 
     return DashboardState(
         active_threats=active_threats,
@@ -316,115 +430,175 @@ async def dashboard_state():
 # ─────────────────────────────────────────────────────────────────────
 # Chat-to-Map — Conversational explainability
 # ─────────────────────────────────────────────────────────────────────
+
 @router.post("/chat", response_model=ChatResponse)
 async def chat_to_map(query: ChatQuery):
-    """Answer operator questions about agent decisions with ES|QL rationale."""
+    """Answer operator questions about agent decisions with ES|QL rationale.
+
+    Flow
+    ----
+    1. Claude Haiku classifies the question into one of four intents
+       (supplier_ranking | risk_assessment | reroute_status | general).
+    2. The matching ES|QL query from the catalog is executed against Elasticsearch.
+    3. Claude Sonnet synthesises the live results into a natural-language explanation.
+    4. The exact ES|QL query is returned for auditability.
+    """
     es = get_es_client()
-    question = query.question.lower()
+    intent = await classify_intent(query.question)
+    logger.info("Chat intent=%s question=%r", intent, query.question[:80])
 
-    # Determine which ES|QL to run based on question intent
-    if "why" in question and ("vendor" in question or "supplier" in question):
-        # "Why did you choose Vendor C over Vendor A?"
-        esql_query = """FROM erp-locations
-| WHERE type == "supplier" AND active == true
-| EVAL risk_adjusted_score = reliability_index * (1.0 / (avg_lead_time_hours + 1.0))
-| SORT risk_adjusted_score DESC
-| LIMIT 10
-| KEEP name, location_id, reliability_index, avg_lead_time_hours, risk_adjusted_score, inventory_value_usd"""
+    # ── INTENT: supplier_ranking ──────────────────────────────────────────────
+    if intent == "supplier_ranking":
+        esql_query = ESQL_SUPPLIER_RANKING
+        try:
+            result = es.esql.query(query=esql_query)
+            columns = [col.name for col in result.columns]
+            table = [dict(zip(columns, row)) for row in result.values]
+        except Exception as exc:
+            logger.warning(
+                "LOOKUP JOIN failed (supplier-sla-scores not populated?): %s. "
+                "Falling back to reliability-only ranking.", exc,
+            )
+            esql_query = ESQL_SUPPLIER_RANKING_FALLBACK
+            result = es.esql.query(query=esql_query)
+            columns = [col.name for col in result.columns]
+            table = [dict(zip(columns, row)) for row in result.values]
 
-        result = es.esql.query(query=esql_query, format="json")
-        rows = result.get("values", [])
-        columns = [c["name"] for c in result.get("columns", [])]
-
-        table = [dict(zip(columns, row)) for row in rows]
-        highlighted = [r.get("name", "") for r in table[:3]]
-
-        answer = _build_supplier_rationale(table, query.question)
-
+        answer = await explain_results(
+            question=query.question,
+            esql_query=esql_query,
+            table=table,
+            context_threat_id=query.context_threat_id,
+        )
         return ChatResponse(
             answer=answer,
             esql_query=esql_query,
-            highlighted_entities=highlighted,
+            highlighted_entities=[r.get("name", "") for r in table[:3]],
             map_annotations=[
                 {"type": "highlight_supplier", "supplier_id": r.get("location_id")}
                 for r in table[:5]
             ],
         )
 
-    elif "risk" in question or "value" in question:
-        esql_query = """FROM weather-threats
-| WHERE status == "active"
-| STATS threat_count = COUNT(*), avg_severity = COUNT_DISTINCT(severity) BY event_type
-| SORT threat_count DESC"""
+    # ── INTENT: risk_assessment ───────────────────────────────────────────────
+    if intent == "risk_assessment":
+        esql_query = ESQL_RISK_ASSESSMENT
+        try:
+            result = es.esql.query(query=esql_query)
+            columns = [col.name for col in result.columns]
+            table = [dict(zip(columns, row)) for row in result.values]
+        except Exception as exc:
+            logger.warning("Risk assessment query failed: %s", exc)
+            table = []
 
-        result = es.esql.query(query=esql_query, format="json")
-        rows = result.get("values", [])
-        columns = [c["name"] for c in result.get("columns", [])]
-        table = [dict(zip(columns, row)) for row in rows]
-
+        answer = await explain_results(
+            question=query.question,
+            esql_query=esql_query,
+            table=table,
+            context_threat_id=query.context_threat_id,
+        )
         return ChatResponse(
-            answer=f"Currently tracking {sum(r.get('threat_count', 0) for r in table)} active threats across {len(table)} event types.",
+            answer=answer,
             esql_query=esql_query,
             highlighted_entities=[r.get("event_type", "") for r in table],
         )
 
-    elif "route" in question or "reroute" in question:
-        active_proposals = [
-            p for p in _proposals.values() if p.get("approved")
-        ]
-        if active_proposals:
-            latest = active_proposals[-1]
-            return ChatResponse(
-                answer=(
-                    f"The latest approved reroute switches from "
-                    f"{latest['original_supplier_id']} to {latest['proposed_supplier_name']} "
-                    f"with an attention score of {latest['attention_score']:.4f} "
-                    f"and drive time of {latest['mapbox_drive_time_minutes']:.0f} minutes. "
-                    f"Rationale: {latest.get('rationale', 'N/A')}"
-                ),
-                highlighted_entities=[
-                    latest["original_supplier_id"],
-                    latest["proposed_supplier_id"],
-                ],
-                map_annotations=[
-                    {"type": "route", "proposal_id": latest["proposal_id"]}
-                ],
-            )
-        return ChatResponse(answer="No active reroutes at this time.")
+    # ── INTENT: reroute_status ────────────────────────────────────────────────
+    if intent == "reroute_status":
+        approved, _ = _list_proposals(
+            statuses=["approved", "auto_approved"],
+            size=5,
+            sort_by="created_at",
+            sort_order="desc",
+        )
+        table = approved or []
 
-    else:
+        answer = await explain_results(
+            question=query.question,
+            esql_query=ESQL_REROUTE_PROPOSALS,
+            table=table,
+            context_threat_id=query.context_threat_id,
+        )
+
+        highlighted: list[str] = []
+        annotations: list[dict[str, Any]] = []
+        if table:
+            latest = table[0]
+            highlighted = [
+                latest.get("original_supplier_id", ""),
+                latest.get("proposed_supplier_id", ""),
+            ]
+            annotations = [{"type": "route", "proposal_id": latest.get("proposal_id")}]
+
         return ChatResponse(
-            answer=(
-                "I can help with questions about: supplier selection rationale, "
-                "current risk assessment, or active reroutes. Try asking "
-                "'Why did you choose Vendor C?' or 'What is the current value at risk?'"
-            )
+            answer=answer,
+            esql_query=ESQL_REROUTE_PROPOSALS,
+            highlighted_entities=highlighted,
+            map_annotations=annotations,
         )
 
-
-def _build_supplier_rationale(table: list[dict], question: str) -> str:
-    """Build a human-readable explanation of supplier ranking."""
-    if not table:
-        return "No supplier data available."
-
-    lines = ["Here's the current supplier ranking by risk-adjusted score:\n"]
-    for i, row in enumerate(table[:5], 1):
-        lines.append(
-            f"{i}. **{row.get('name', 'Unknown')}** — "
-            f"Reliability: {row.get('reliability_index', 0):.3f}, "
-            f"Avg Lead Time: {row.get('avg_lead_time_hours', 0):.1f}h, "
-            f"Score: {row.get('risk_adjusted_score', 0):.4f}"
+    # ── INTENT: general (fallthrough) ─────────────────────────────────────────
+    return ChatResponse(
+        answer=(
+            "I can help with questions about: supplier selection rationale, "
+            "current risk assessment, or active reroutes. Try asking "
+            "'Why did you choose Vendor C?' or 'What is the current value at risk?'"
         )
+    )
 
-    if len(table) >= 2:
-        top = table[0]
-        second = table[1]
-        lines.append(
-            f"\n{top.get('name')} ranks highest because its reliability index "
-            f"({top.get('reliability_index', 0):.3f}) combined with faster lead time "
-            f"({top.get('avg_lead_time_hours', 0):.1f}h) produces a superior "
-            f"risk-adjusted score compared to {second.get('name')} "
-            f"({second.get('risk_adjusted_score', 0):.4f})."
-        )
 
-    return "\n".join(lines)
+# ─────────────────────────────────────────────────────────────────────
+# Server-Sent Events — real-time push to all browser sessions
+# ─────────────────────────────────────────────────────────────────────
+
+@router.get("/events")
+async def sse_events(request: Request):
+    """Server-Sent Events stream for real-time dashboard updates.
+
+    The browser opens one long-lived GET /events connection per tab.
+    When the backend broadcasts (pipeline_complete, execution_event,
+    ingest_complete), every connected tab receives it instantly and
+    re-fetches /dashboard/state to refresh the globe.
+
+    SSE event names
+    ---------------
+    connected          — initial handshake (no action needed)
+    execution_event    — Elastic Workflow executed a reroute
+    pipeline_complete  — 3-agent pipeline finished a cycle
+    ingest_complete    — NOAA/FIRMS poll completed
+
+    Browser usage::
+
+        const es = new EventSource('/events');
+        es.addEventListener('pipeline_complete', () => reloadState());
+        es.addEventListener('execution_event',   () => reloadState());
+    """
+    from app.core.events import subscribe, unsubscribe
+
+    async def _stream():
+        q = await subscribe()
+        try:
+            # Immediate handshake so the client knows the connection is live
+            yield "event: connected\ndata: {}\n\n"
+            while True:
+                try:
+                    envelope = await asyncio.wait_for(q.get(), timeout=15.0)
+                    event_type = envelope.get("type", "message")
+                    data       = json.dumps(envelope.get("data", {}))
+                    yield f"event: {event_type}\ndata: {data}\n\n"
+                except asyncio.TimeoutError:
+                    # SSE keepalive comment — prevents proxies/load-balancers
+                    # from closing the idle connection
+                    yield ": ping\n\n"
+        finally:
+            unsubscribe(q)
+
+    return StreamingResponse(
+        _stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control":    "no-cache, no-transform",
+            "X-Accel-Buffering": "no",   # tell nginx not to buffer SSE
+            "Connection":       "keep-alive",
+        },
+    )
