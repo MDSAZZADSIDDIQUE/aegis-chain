@@ -11,6 +11,8 @@ import logging
 from collections import defaultdict
 from typing import Any
 
+from starlette.concurrency import run_in_threadpool
+
 from app.core.elastic import get_es_client
 
 logger = logging.getLogger("aegis.agent.watcher")
@@ -140,7 +142,7 @@ async def run_watcher_cycle() -> dict[str, Any]:
 
     # ── Step 1: Predictive bucketing via TS command ─────────────────────────
     try:
-        ts_result = es.esql.query(query=WATCHER_ESQL_TS_BUCKETS)
+        ts_result = await run_in_threadpool(es.esql.query, query=WATCHER_ESQL_TS_BUCKETS)
         columns = [col.name for col in ts_result.columns]
         bucket_rows = [dict(zip(columns, row)) for row in ts_result.values]
         predictions = _aggregate_ts_buckets(bucket_rows)
@@ -158,37 +160,27 @@ async def run_watcher_cycle() -> dict[str, Any]:
     # the last 72 hours.  Keep the highest-scoring record per entity so that
     # one noisy burst doesn't double-count.
     ml_by_entity: dict[str, dict[str, Any]] = {}
+
     try:
-        ml_resp = es.search(
-            index="aegis-ml-results",
-            body={
-                "size": 200,
+        search_kwargs = {
+            "index": "aegis-ml-results",
+            "body": {
+                "size": 500,
                 "query": {
                     "bool": {
                         "filter": [
-                            {"range": {"timestamp": {"gte": "now-72h"}}},
-                            {
-                                "bool": {
-                                    "should": [
-                                        {"range": {"anomaly_score": {"gte": 75}}},
-                                        {"range": {"record_score": {"gte": 75}}},
-                                    ],
-                                    "minimum_should_match": 1,
-                                }
-                            },
-                            {"term": {"result_type": "record"}},
-                        ]
+                            {"range": {"timestamp": {"gte": "now-72h"}}}
+                        ],
+                        "should": [
+                            {"range": {"anomaly_score": {"gte": 75}}},
+                            {"range": {"record_score": {"gte": 75}}}
+                        ],
+                        "minimum_should_match": 1
                     }
-                },
-                "sort": [{"anomaly_score": "desc"}, {"record_score": "desc"}],
-                "_source": [
-                    "timestamp", "anomaly_score", "record_score",
-                    "supplier_id", "location_id",
-                    "by_field_value", "over_field_value",
-                    "job_id", "function", "actual", "typical",
-                ],
+                }
             },
-        )
+        }
+        ml_resp = await run_in_threadpool(es.search, **search_kwargs)
         for hit in ml_resp["hits"]["hits"]:
             src = hit["_source"]
             # Resolve entity key — prefer explicit FK fields, then ML by/over fields
@@ -246,14 +238,15 @@ async def run_watcher_cycle() -> dict[str, Any]:
 
     # Step 2: Fetch active threat polygons
     try:
-        threats_resp = es.search(
-            index="weather-threats",
-            body={
+        search_kwargs = {
+            "index": "weather-threats",
+            "body": {
                 "size": 100,
                 "query": {"term": {"status": "active"}},
                 "_source": ["threat_id", "event_type", "severity", "affected_zone", "headline"],
-            },
-        )
+            }
+        }
+        threats_resp = await run_in_threadpool(es.search, **search_kwargs)
         threats = [h["_source"] for h in threats_resp["hits"]["hits"]]
     except Exception as exc:
         logger.error("Failed to fetch active threats: %s", exc)
@@ -268,9 +261,9 @@ async def run_watcher_cycle() -> dict[str, Any]:
 
         try:
             # Use geo_shape query to find locations within the threat zone
-            geo_resp = es.search(
-                index="erp-locations",
-                body={
+            search_kwargs = {
+                "index": "erp-locations",
+                "body": {
                     "size": 100,
                     "query": {
                         "bool": {
@@ -288,8 +281,9 @@ async def run_watcher_cycle() -> dict[str, Any]:
                     "aggs": {
                         "value_at_risk": {"sum": {"field": "inventory_value_usd"}}
                     },
-                },
-            )
+                }
+            }
+            geo_resp = await run_in_threadpool(es.search, **search_kwargs)
 
             at_risk_locs = [h["_source"] for h in geo_resp["hits"]["hits"]]
             zone_var = (

@@ -44,16 +44,21 @@ export default function AegisGlobe({
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const initializedRef = useRef(false);
+  const previousThreatIdRef = useRef<string | undefined>(undefined);
+  
+  const [styleLoaded, setStyleLoaded] = useState(false);
   
   // Keep handlers in refs so map listeners always use latest version 
   // without needing to re-initialize the entire map.
   const onLocationClickRef = useRef(onLocationClick);
   const onThreatClickRef = useRef(onThreatClick);
+  const threatsRef = useRef(threats);
 
   useEffect(() => {
     onLocationClickRef.current = onLocationClick;
     onThreatClickRef.current = onThreatClick;
-  }, [onLocationClick, onThreatClick]);
+    threatsRef.current = threats;
+  }, [onLocationClick, onThreatClick, threats]);
 
   // ── Initialize map ──────────────────────────────────────────────
   useEffect(() => {
@@ -73,6 +78,8 @@ export default function AegisGlobe({
       bearing: -8,
       antialias: true,
     });
+
+    let animationId: number;
 
     map.on("style.load", () => {
       // ── Load Custom SVG Icons ───────────────────────────────────
@@ -274,8 +281,13 @@ export default function AegisGlobe({
         map.on("click", layer, (e) => {
           if (!e.features?.[0]) return;
           const props = e.features[0].properties;
-          if (onLocationClickRef.current && props) {
-            onLocationClickRef.current(props as unknown as ERPLocation);
+          const geom = e.features[0].geometry as GeoJSON.Point;
+          if (onLocationClickRef.current && props && geom?.coordinates) {
+            const loc = {
+              ...props,
+              coordinates: { lon: geom.coordinates[0], lat: geom.coordinates[1] }
+            } as unknown as ERPLocation;
+            onLocationClickRef.current(loc);
           }
         });
       });
@@ -283,8 +295,11 @@ export default function AegisGlobe({
       map.on("click", "threat-fills", (e) => {
         if (!e.features?.[0]) return;
         const props = e.features[0].properties;
-        if (onThreatClickRef.current && props) {
-          onThreatClickRef.current(props as unknown as WeatherThreat);
+        if (onThreatClickRef.current && props?.threat_id) {
+          const fullThreat = threatsRef.current.find(t => t.threat_id === props.threat_id);
+          if (fullThreat) {
+            onThreatClickRef.current(fullThreat);
+          }
         }
       });
 
@@ -342,9 +357,8 @@ export default function AegisGlobe({
       });
 
       // ── Map Animations ──────────────────────────────────────────
-      let animationId: number;
       function animate() {
-        if (!map || !map.isStyleLoaded()) return;
+        if (!map || !map.isStyleLoaded() || !initializedRef.current) return;
         const now = Date.now();
         
         // Threat Pulse (3 sec cycle)
@@ -367,13 +381,16 @@ export default function AegisGlobe({
         animationId = requestAnimationFrame(animate);
       }
       animate();
+      
+      setStyleLoaded(true);
     });
 
-    map.addControl(new mapboxgl.NavigationControl(), "top-right");
+    map.addControl(new mapboxgl.NavigationControl(), "bottom-right");
 
     mapRef.current = map;
 
     return () => {
+      cancelAnimationFrame(animationId);
       map.remove();
       initializedRef.current = false;
     };
@@ -473,13 +490,29 @@ export default function AegisGlobe({
       let lineGeometry: GeoJSON.Geometry;
       if (route.route_geometry) {
         lineGeometry = route.route_geometry;
+      } else if (origin.coordinates.lon === dest.coordinates.lon && origin.coordinates.lat === dest.coordinates.lat) {
+        lineGeometry = {
+          type: "Point",
+          coordinates: [origin.coordinates.lon, origin.coordinates.lat],
+        };
       } else {
-        const arc = turf.greatCircle(
-          turf.point([origin.coordinates.lon, origin.coordinates.lat]),
-          turf.point([dest.coordinates.lon,   dest.coordinates.lat]),
-          { npoints: 100 },
-        );
-        lineGeometry = arc.geometry;
+        try {
+          const arc = turf.greatCircle(
+            turf.point([origin.coordinates.lon, origin.coordinates.lat]),
+            turf.point([dest.coordinates.lon,   dest.coordinates.lat]),
+            { npoints: 100 },
+          );
+          lineGeometry = arc.geometry;
+        } catch (err) {
+          console.warn("[AegisGlobe] turf.greatCircle failed, falling back to LineString.", err);
+          lineGeometry = {
+            type: "LineString",
+            coordinates: [
+              [origin.coordinates.lon, origin.coordinates.lat],
+              [dest.coordinates.lon, dest.coordinates.lat]
+            ]
+          };
+        }
       }
 
       features.push({
@@ -533,6 +566,8 @@ export default function AegisGlobe({
     const map = mapRef.current;
     if (!map) return;
 
+    if (!styleLoaded) return;
+
     if (map.getLayer("threat-fills")) {
       map.setPaintProperty("threat-fills", "fill-opacity", [
         "case",
@@ -559,8 +594,9 @@ export default function AegisGlobe({
       ]);
     }
 
-    // Move camera 
-    if (selectedThreatId) {
+    // Move camera only when the actual selected ID changes (not on polling data refresh)
+    if (selectedThreatId && selectedThreatId !== previousThreatIdRef.current) {
+      previousThreatIdRef.current = selectedThreatId;
       const threat = threats.find((t) => t.threat_id === selectedThreatId);
       if (threat?.centroid) {
         map.flyTo({
@@ -572,7 +608,7 @@ export default function AegisGlobe({
         });
       }
     }
-  }, [selectedThreatId, threats]);
+  }, [selectedThreatId, threats, styleLoaded]);
 
   return (
     <div

@@ -6,6 +6,7 @@ import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends
+from fastapi.concurrency import run_in_threadpool
 
 from app.core.security import verify_api_key
 from app.services.noaa import fetch_noaa_alerts
@@ -24,13 +25,22 @@ router = APIRouter(
 @router.post("/poll")
 async def trigger_poll():
     """Manually trigger a full ingestion cycle (NOAA + FIRMS)."""
-    expire_old_threats()
+    await run_in_threadpool(expire_old_threats)
 
-    noaa_threats = await fetch_noaa_alerts()
-    firms_threats = await fetch_firms_fires()
+    noaa_threats = []
+    try:
+        noaa_threats = await fetch_noaa_alerts()
+    except Exception as exc:
+        logger.error("NOAA ingestion failed: %s", exc)
+
+    firms_threats = []
+    try:
+        firms_threats = await fetch_firms_fires()
+    except Exception as exc:
+        logger.error("NASA FIRMS ingestion failed: %s", exc)
 
     all_threats = noaa_threats + firms_threats
-    indexed = index_threats(all_threats)
+    indexed = await run_in_threadpool(index_threats, all_threats)
 
     result = {
         "noaa_alerts": len(noaa_threats),
@@ -46,7 +56,7 @@ async def trigger_poll():
 
 
 @router.get("/status")
-async def ingestion_status():
+def ingestion_status():
     """Return counts of currently active threats by source."""
     from app.core.elastic import get_es_client
 

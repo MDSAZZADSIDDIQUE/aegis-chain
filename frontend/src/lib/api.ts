@@ -71,7 +71,8 @@ export async function fetchDashboardState(): Promise<DashboardState> {
 
 export async function sendChatMessage(
   question: string,
-  contextThreatId?: string
+  contextThreatId?: string,
+  signal?: AbortSignal
 ): Promise<ChatResponse> {
   const res = await fetch(`${API_URL}/chat`, {
     method: "POST",
@@ -80,6 +81,7 @@ export async function sendChatMessage(
       question,
       context_threat_id: contextThreatId ?? null,
     }),
+    signal,
   });
   if (!res.ok) throw new Error(`Chat request failed: ${res.status}`);
   return res.json();

@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
+from starlette.concurrency import run_in_threadpool
 
 from app.agents.watcher import run_watcher_cycle
 from app.agents.procurement import run_procurement_cycle
@@ -24,6 +25,7 @@ from app.services.proposals import (
     upsert_proposal,
     update_proposal as _update_proposal,
 )
+from app.models.schemas import RerouteProposal
 from app.core.config import settings
 
 logger = logging.getLogger("aegis.orchestrator")
@@ -98,12 +100,13 @@ async def run_full_pipeline(emit: EmitFn = None) -> dict[str, Any]:
             continue
 
         # Use the highest-value affected location as the origin
-        origin = max(affected_locs, key=lambda x: x.get("inventory_value_usd", 0))
+        origin = max(affected_locs, key=lambda x: x.get("inventory_value_usd") or 0)
 
         from app.core.elastic import get_es_client
         es = get_es_client()
 
-        origin_resp = es.search(
+        origin_resp = await run_in_threadpool(
+            es.search,
             index="erp-locations",
             body={"query": {"term": {"location_id": origin["location_id"]}}, "size": 1},
         )
@@ -112,7 +115,8 @@ async def run_full_pipeline(emit: EmitFn = None) -> dict[str, Any]:
             continue
         origin_doc = origin_hits[0]["_source"]
 
-        threat_resp = es.search(
+        threat_resp = await run_in_threadpool(
+            es.search,
             index="weather-threats",
             body={"query": {"term": {"threat_id": threat_id}}, "size": 1},
         )
@@ -131,7 +135,9 @@ async def run_full_pipeline(emit: EmitFn = None) -> dict[str, Any]:
         # ── Persist each proposal immediately ────────────────────────
         for p in proposals:
             try:
-                upsert_proposal({**p, "hitl_status": "pending"})
+                # Validate against target schema to drop internal agent-only keys
+                validated = RerouteProposal(**p).model_dump()
+                upsert_proposal({**validated, "hitl_status": "pending"})
             except Exception as exc:
                 logger.error("Failed to persist proposal %s: %s", p.get("proposal_id"), exc)
 

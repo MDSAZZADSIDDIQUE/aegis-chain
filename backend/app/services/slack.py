@@ -84,18 +84,22 @@ async def send_hitl_approval_request(
 
     payload = {"blocks": blocks, "text": f"HITL Approval: {proposal_id}"}
 
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            settings.slack_webhook_url,
-            json=payload,
-            timeout=10,
-        )
-        if resp.status_code == 200:
-            logger.info("HITL approval request sent for %s", proposal_id)
-            return True
-        else:
-            logger.error("Slack webhook failed: %s %s", resp.status_code, resp.text)
-            return False
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                settings.slack_webhook_url,
+                json=payload,
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                logger.info("HITL approval request sent for %s", proposal_id)
+                return True
+            else:
+                logger.error("Slack webhook failed: %s %s", resp.status_code, resp.text)
+                return False
+    except httpx.RequestError as exc:
+        logger.error("Network error while requesting HITL for %s: %s", proposal_id, exc)
+        return False
 
 
 def verify_slack_signature(

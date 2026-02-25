@@ -11,6 +11,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
+from fastapi.concurrency import run_in_threadpool
 
 from app.core.config import settings
 from app.core.security import verify_api_key
@@ -82,7 +83,7 @@ async def compute_route(req: MapboxRouteRequest):
 # ─────────────────────────────────────────────────────────────────────
 
 @router.post("/erp-locations", response_model=ERPLocationCreated, status_code=201)
-async def upsert_erp_location(body: ERPLocationUpsert):
+def upsert_erp_location(body: ERPLocationUpsert):
     """Add or update an ERP node (supplier, warehouse, distribution centre, port).
 
     If ``location_id`` is omitted a new node is created with a generated ID.
@@ -135,7 +136,7 @@ async def upsert_erp_location(body: ERPLocationUpsert):
 # ─────────────────────────────────────────────────────────────────────
 
 @router.post("/proposals")
-async def submit_proposal(proposal: RerouteProposal):
+def submit_proposal(proposal: RerouteProposal):
     """Agent 2 submits a reroute proposal for Agent 3 review.
     Persists to aegis-proposals index; idempotent on proposal_id.
     """
@@ -146,7 +147,7 @@ async def submit_proposal(proposal: RerouteProposal):
 
 
 @router.get("/proposals")
-async def list_proposals_endpoint(
+def list_proposals_endpoint(
     status: str | None = Query(
         None,
         description="Filter by hitl_status: pending | awaiting_approval | "
@@ -166,7 +167,7 @@ async def list_proposals_endpoint(
 
 
 @router.get("/proposals/{proposal_id}")
-async def get_proposal_endpoint(proposal_id: str):
+def get_proposal_endpoint(proposal_id: str):
     """Fetch a single proposal by its ID."""
     doc = _get_proposal(proposal_id)
     if doc is None:
@@ -183,7 +184,7 @@ async def submit_verdict(verdict: AuditVerdict):
     """Agent 3 submits its audit verdict.  Triggers auto-execute or HITL.
     Updates the aegis-proposals document in place.
     """
-    proposal = _get_proposal(verdict.proposal_id)
+    proposal = await run_in_threadpool(_get_proposal, verdict.proposal_id)
     if proposal is None:
         raise HTTPException(status_code=404, detail="Proposal not found")
 
@@ -198,7 +199,7 @@ async def submit_verdict(verdict: AuditVerdict):
             drive_time_min=proposal["mapbox_drive_time_minutes"],
             rationale=verdict.explanation,
         )
-        _update_proposal(verdict.proposal_id, {
+        await run_in_threadpool(_update_proposal, verdict.proposal_id, {
             "hitl_status":     "awaiting_approval",
             "hitl_slack_sent": sent,
             "requires_hitl":   True,
@@ -213,7 +214,7 @@ async def submit_verdict(verdict: AuditVerdict):
         }
 
     # Auto-execute — cost within threshold
-    _update_proposal(verdict.proposal_id, {
+    await run_in_threadpool(_update_proposal, verdict.proposal_id, {
         "hitl_status":     "auto_approved",
         "approved":        True,
         "requires_hitl":   False,
@@ -223,8 +224,10 @@ async def submit_verdict(verdict: AuditVerdict):
     })
 
     if verdict.rl_adjustment != 0:
-        _apply_rl_adjustment(
-            proposal["original_supplier_id"], -abs(verdict.rl_adjustment)
+        await run_in_threadpool(
+            _apply_rl_adjustment,
+            proposal["original_supplier_id"], 
+            -abs(verdict.rl_adjustment)
         )
 
     return {
@@ -244,6 +247,9 @@ async def slack_action_callback(request: Request):
     timestamp = request.headers.get("X-Slack-Request-Timestamp", "")
     signature = request.headers.get("X-Slack-Signature", "")
 
+    if not timestamp:
+        raise HTTPException(status_code=403, detail="Missing X-Slack-Request-Timestamp header")
+
     if settings.slack_signing_secret and not verify_slack_signature(
         timestamp, body, signature
     ):
@@ -261,12 +267,12 @@ async def slack_action_callback(request: Request):
     action_id   = action.get("action_id", "")
     user        = payload.get("user", {})
 
-    proposal = _get_proposal(proposal_id)
+    proposal = await run_in_threadpool(_get_proposal, proposal_id)
     if proposal is None:
         raise HTTPException(status_code=404, detail="Proposal not found")
 
     if action_id == "hitl_approve":
-        _update_proposal(proposal_id, {
+        await run_in_threadpool(_update_proposal, proposal_id, {
             "hitl_status": "approved",
             "approved":    True,
             "approved_by": user.get("username", "unknown"),
@@ -275,15 +281,17 @@ async def slack_action_callback(request: Request):
         return {"response_type": "in_channel", "text": f"Reroute `{proposal_id}` APPROVED."}
 
     if action_id == "hitl_reject":
-        _update_proposal(proposal_id, {
+        await run_in_threadpool(_update_proposal, proposal_id, {
             "hitl_status": "rejected",
             "approved":    False,
             "rejected_by": user.get("username", "unknown"),
         })
         logger.info("Proposal %s REJECTED by %s", proposal_id, user.get("username"))
         # Penalise the proposed supplier that was rejected
-        _apply_rl_adjustment(
-            proposal["proposed_supplier_id"], -settings.rl_penalty_factor
+        await run_in_threadpool(
+            _apply_rl_adjustment,
+            proposal["proposed_supplier_id"], 
+            -settings.rl_penalty_factor
         )
         return {"response_type": "in_channel", "text": f"Reroute `{proposal_id}` REJECTED."}
 
@@ -295,7 +303,7 @@ async def slack_action_callback(request: Request):
 # ─────────────────────────────────────────────────────────────────────
 
 @router.post("/rl/update")
-async def rl_update(update: RLUpdate):
+def rl_update(update: RLUpdate):
     """Feedback loop: update supplier reliability based on delivery outcome."""
     es = get_es_client()
 
@@ -352,79 +360,94 @@ async def dashboard_state():
     """Aggregate current system state for the frontend globe view."""
     es = get_es_client()
 
-    # Active weather threats
-    threats_resp = es.search(
-        index="weather-threats",
-        body={
-            "size": 200,
-            "query": {"term": {"status": "active"}},
-            "sort": [{"ingested_at": "desc"}],
-        },
-    )
-    active_threats = [h["_source"] for h in threats_resp["hits"]["hits"]]
-
-    # ERP locations
-    locs_resp = es.search(
-        index="erp-locations",
-        body={"size": 500, "query": {"term": {"active": True}}},
-    )
-    erp_locations = [h["_source"] for h in locs_resp["hits"]["hits"]]
-
-    # Value at risk — sum inventory in threat zones
-    value_at_risk = 0.0
-    for threat in active_threats:
-        zone = threat.get("affected_zone")
-        if not zone:
-            continue
-        var_resp = es.search(
-            index="erp-locations",
+    try:
+        # Active weather threats
+        threats_resp = await run_in_threadpool(
+            es.search,
+            index="weather-threats",
             body={
-                "size": 0,
-                "query": {
-                    "bool": {
-                        "filter": [
-                            {"geo_shape": {
-                                "coordinates": {
-                                    "shape": zone,
-                                    "relation": "intersects",
-                                }
-                            }},
-                            {"term": {"active": True}},
-                        ]
-                    }
-                },
-                "aggs": {"total_value": {"sum": {"field": "inventory_value_usd"}}},
+                "size": 200,
+                "query": {"term": {"status": "active"}},
+                "sort": [{"ingested_at": "desc"}],
             },
         )
-        value_at_risk += (
-            var_resp.get("aggregations", {})
-            .get("total_value", {})
-            .get("value", 0)
+        active_threats = [h["_source"] for h in threats_resp["hits"]["hits"]]
+
+        # ERP locations
+        locs_resp = await run_in_threadpool(
+            es.search,
+            index="erp-locations",
+            body={"size": 500, "query": {"term": {"active": True}}},
+        )
+        erp_locations = [h["_source"] for h in locs_resp["hits"]["hits"]]
+
+        # Value at risk — sum inventory in threat zones
+        value_at_risk = 0.0
+        for threat in active_threats:
+            zone = threat.get("affected_zone")
+            if not zone:
+                continue
+            var_resp = await run_in_threadpool(
+                es.search,
+                index="erp-locations",
+                body={
+                    "size": 0,
+                    "query": {
+                        "bool": {
+                            "filter": [
+                                {"geo_shape": {
+                                    "coordinates": {
+                                        "shape": zone,
+                                        "relation": "intersects",
+                                    }
+                                }},
+                                {"term": {"active": True}},
+                            ]
+                        }
+                    },
+                    "aggs": {"total_value": {"sum": {"field": "inventory_value_usd"}}},
+                },
+            )
+            value_at_risk += (
+                var_resp.get("aggregations", {})
+                .get("total_value", {})
+                .get("value", 0)
+            )
+
+        # Active routes — proposals that are visible on the map
+        active_routes, _ = await run_in_threadpool(
+            _list_proposals,
+            statuses=["auto_approved", "approved", "awaiting_approval"],
+            size=200,
+            sort_by="created_at",
+            sort_order="desc",
         )
 
-    # Active routes — proposals that are visible on the map
-    active_routes, _ = _list_proposals(
-        statuses=["auto_approved", "approved", "awaiting_approval"],
-        size=200,
-        sort_by="created_at",
-        sort_order="desc",
-    )
+        # Pending — proposals awaiting human decision
+        pending, _ = await run_in_threadpool(
+            _list_proposals,
+            statuses=["pending", "awaiting_approval"],
+            size=100,
+            sort_by="created_at",
+            sort_order="desc",
+        )
 
-    # Pending — proposals awaiting human decision
-    pending, _ = _list_proposals(
-        statuses=["pending", "awaiting_approval"],
-        size=100,
-        sort_by="created_at",
-        sort_order="desc",
-    )
-
-    return DashboardState(
-        active_threats=active_threats,
-        erp_locations=erp_locations,
-        active_routes=active_routes,
-        pending_proposals=pending,
-        total_value_at_risk=value_at_risk,
-    )
+        return DashboardState(
+            active_threats=active_threats,
+            erp_locations=erp_locations,
+            active_routes=active_routes,
+            pending_proposals=pending,
+            total_value_at_risk=value_at_risk,
+        )
+    except Exception as exc:
+        logger.error("Failed to aggregate dashboard state (Elasticsearch offline?): %s", exc)
+        return DashboardState(
+            active_threats=[],
+            erp_locations=[],
+            active_routes=[],
+            pending_proposals=[],
+            total_value_at_risk=0.0,
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -451,18 +474,22 @@ async def chat_to_map(query: ChatQuery):
     if intent == "supplier_ranking":
         esql_query = ESQL_SUPPLIER_RANKING
         try:
-            result = es.esql.query(query=esql_query)
-            columns = [col.name for col in result.columns]
-            table = [dict(zip(columns, row)) for row in result.values]
+            def _query_ranking():
+                res = es.esql.query(query=esql_query)
+                cols = [col.name for col in res.columns]
+                return [dict(zip(cols, row)) for row in res.values]
+            table = await run_in_threadpool(_query_ranking)
         except Exception as exc:
             logger.warning(
                 "LOOKUP JOIN failed (supplier-sla-scores not populated?): %s. "
                 "Falling back to reliability-only ranking.", exc,
             )
             esql_query = ESQL_SUPPLIER_RANKING_FALLBACK
-            result = es.esql.query(query=esql_query)
-            columns = [col.name for col in result.columns]
-            table = [dict(zip(columns, row)) for row in result.values]
+            def _query_fallback():
+                res = es.esql.query(query=esql_query)
+                cols = [col.name for col in res.columns]
+                return [dict(zip(cols, row)) for row in res.values]
+            table = await run_in_threadpool(_query_fallback)
 
         answer = await explain_results(
             question=query.question,
@@ -484,9 +511,11 @@ async def chat_to_map(query: ChatQuery):
     if intent == "risk_assessment":
         esql_query = ESQL_RISK_ASSESSMENT
         try:
-            result = es.esql.query(query=esql_query)
-            columns = [col.name for col in result.columns]
-            table = [dict(zip(columns, row)) for row in result.values]
+            def _query_risk():
+                res = es.esql.query(query=esql_query)
+                cols = [col.name for col in res.columns]
+                return [dict(zip(cols, row)) for row in res.values]
+            table = await run_in_threadpool(_query_risk)
         except Exception as exc:
             logger.warning("Risk assessment query failed: %s", exc)
             table = []
@@ -505,7 +534,8 @@ async def chat_to_map(query: ChatQuery):
 
     # ── INTENT: reroute_status ────────────────────────────────────────────────
     if intent == "reroute_status":
-        approved, _ = _list_proposals(
+        approved, _ = await run_in_threadpool(
+            _list_proposals,
             statuses=["approved", "auto_approved"],
             size=5,
             sort_by="created_at",

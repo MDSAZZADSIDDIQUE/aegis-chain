@@ -27,6 +27,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 from app.core.elastic import get_es_client
 from app.core.security import verify_api_key
@@ -177,7 +178,8 @@ async def simulate(
     # ── Step 1: fetch historical weather threats ──────────────────────────────
     threats: list[dict[str, Any]] = []
     try:
-        resp = es.search(
+        resp = await run_in_threadpool(
+            es.search,
             index="weather-threats",
             body={
                 "size": 500,
@@ -217,7 +219,7 @@ async def simulate(
   BY supplier_id, weather_threat_id
 | SORT total_delay_cost DESC
 | LIMIT 200"""
-        result = es.esql.query(query=esql_q)
+        result = await run_in_threadpool(es.esql.query, query=esql_q)
         cols = [c.name for c in result.columns]
         rows = [dict(zip(cols, row)) for row in result.values]
         if rows:

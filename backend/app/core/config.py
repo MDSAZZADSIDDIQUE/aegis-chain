@@ -16,6 +16,11 @@ class Settings(BaseSettings):
     elastic_cloud_id: str = ""
     elastic_api_key: str = ""
     elastic_url: str = ""
+    allowed_origins: list[str] = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://172.16.0.1:3000",
+    ]
 
     # NOAA
     noaa_user_agent: str = "AegisChain/1.0 (contact@aegischain.dev)"

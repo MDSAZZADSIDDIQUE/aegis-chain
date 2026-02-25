@@ -97,12 +97,21 @@ async def fetch_noaa_alerts() -> list[dict[str, Any]]:
                 continue
 
             alert_id = props.get("id", props.get("@id", ""))
-
-            # Build the affected zone polygon
+            
+            affected_zone = None
             geom = feat.get("geometry")
+            
             if geom and geom.get("coordinates"):
-                affected_zone = geom
-            else:
+                try:
+                    raw_shape = shape(geom)
+                    if not raw_shape.is_valid:
+                        raw_shape = make_valid(raw_shape)
+                    affected_zone = mapping(raw_shape)
+                except Exception as exc:
+                    logger.warning("Failed to valid root feature geometry for alert %s: %s", alert_id, exc)
+                    affected_zone = None
+
+            if not affected_zone:
                 # Fetch geometry from affected zone URLs
                 zone_urls = props.get("affectedZones") or []
                 zone_geoms = []
@@ -126,9 +135,13 @@ async def fetch_noaa_alerts() -> list[dict[str, Any]]:
                 affected_zone = mapping(merged)
 
             # Compute centroid
-            shp = shape(affected_zone)
-            centroid = shp.centroid
-            centroid_dict = {"lat": centroid.y, "lon": centroid.x}
+            try:
+                shp = shape(affected_zone)
+                centroid = shp.centroid
+                centroid_dict = {"lat": centroid.y, "lon": centroid.x}
+            except Exception as exc:
+                logger.warning("Failed to compute centroid for alert %s: %s", alert_id, exc)
+                continue
 
             threats.append({
                 "threat_id": alert_id,

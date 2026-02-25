@@ -134,6 +134,21 @@ export default function ChatToMap({ contextThreatId, onHighlight }: ChatToMapPro
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
+  const latestContextRef = useRef(contextThreatId);
+  useEffect(() => {
+    latestContextRef.current = contextThreatId;
+  }, [contextThreatId]);
+
+  // Controller to abort in-flight LLM requests if context changes
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+  }, [contextThreatId]);
+
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [log]);
@@ -170,8 +185,19 @@ export default function ChatToMap({ contextThreatId, onHighlight }: ChatToMapPro
     setInput("");
     setLoading(true);
 
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+
     try {
-      const res: ChatResponse = await sendChatMessage(question, contextThreatId);
+      const res: ChatResponse = await sendChatMessage(question, contextThreatId, abortController.signal);
+
+      if (abortControllerRef.current === abortController) {
+        abortControllerRef.current = null;
+      }
+
+      if (contextThreatId !== latestContextRef.current) {
+        return; // Operator switched threats while LLM was processing. Drop stale response.
+      }
 
       const agentEntry: LogEntry = {
         id: `a-${Date.now()}`,
@@ -182,12 +208,16 @@ export default function ChatToMap({ contextThreatId, onHighlight }: ChatToMapPro
         highlightedEntities: res.highlighted_entities,
         ts: new Date(),
       };
+      
       pushEntry(agentEntry);
 
       if (res.highlighted_entities?.length) {
         onHighlight(res.highlighted_entities);
       }
-    } catch {
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name === "AbortError") {
+        return;
+      }
       pushEntry({
         id: `e-${Date.now()}`,
         role: "error",
@@ -357,17 +387,15 @@ function LogRow({
 
         {/* Body */}
         <div className="flex-1 min-w-0">
-          {/* Operator: show prefix + text inline */}
           {entry.role === "operator" ? (
-            <p className="text-[11px] text-stone-300 whitespace-pre-wrap leading-relaxed">
+            <p className="text-[11px] text-stone-300 whitespace-pre-wrap break-words leading-relaxed" style={{ wordBreak: "break-word" }}>
               {entry.text}
             </p>
           ) : (
             <>
-              {/* System / Error: plain mono text, Auditor: typewriter */}
               <p
-                className={`text-[11px] leading-relaxed whitespace-pre-wrap ${entry.role === "error" ? "animate-pulse font-bold tracking-widest" : ""}`}
-                style={{ color: entry.role === "error" ? "#fca5a5" : "#a8a29e" }}
+                className={`text-[11px] leading-relaxed whitespace-pre-wrap break-words ${entry.role === "error" ? "animate-pulse font-bold tracking-widest" : ""}`}
+                style={{ color: entry.role === "error" ? "#fca5a5" : "#a8a29e", wordBreak: "break-word" }}
               >
                 {entry.role === "auditor" ? <TypewriterText text={entry.text} /> : entry.text}
               </p>
@@ -383,9 +411,9 @@ function LogRow({
                   </div>
                   <div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
                     {Object.entries(entry.kvPairs).map(([k, v]) => (
-                      <div key={k} className="flex items-baseline gap-1.5">
+                      <div key={k} className="flex items-baseline gap-1.5 min-w-0">
                         <span className="text-[9px] text-stone-600 uppercase tracking-wide shrink-0">{k}:</span>
-                        <span className="text-[10px] text-lime-400 font-bold truncate">{v}</span>
+                        <span className="text-[10px] text-lime-400 font-bold break-all">{v}</span>
                       </div>
                     ))}
                   </div>

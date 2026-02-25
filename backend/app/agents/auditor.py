@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from starlette.concurrency import run_in_threadpool
 
 from app.core.config import settings
 from app.core.elastic import get_es_client
@@ -71,7 +72,8 @@ async def evaluate_proposal(proposal: dict[str, Any]) -> dict[str, Any]:
     historical_penalty = 0.0
 
     try:
-        hist_resp = es.search(
+        hist_resp = await run_in_threadpool(
+            es.search,
             index="supply-latency-logs",
             body={
                 "size": 0,
@@ -128,7 +130,8 @@ async def evaluate_proposal(proposal: dict[str, Any]) -> dict[str, Any]:
         original_id = proposal.get("original_supplier_id", "")
         if original_id:
             try:
-                orig_resp = es.search(
+                orig_resp = await run_in_threadpool(
+                    es.search,
                     index="erp-locations",
                     body={
                         "query": {"term": {"location_id": original_id}},

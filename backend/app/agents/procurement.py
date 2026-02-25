@@ -23,8 +23,10 @@ import logging
 import math
 import uuid
 from typing import Any
+from starlette.concurrency import run_in_threadpool
 
 from app.core.elastic import get_es_client
+from app.models.schemas import RerouteProposal
 from app.services.mapbox import get_route
 
 logger = logging.getLogger("aegis.agent.procurement")
@@ -61,11 +63,16 @@ async def run_procurement_cycle(
     es = get_es_client()
     proposals: list[dict[str, Any]] = []
 
+    if not threat_centroid or "lat" not in threat_centroid or "lon" not in threat_centroid:
+        logger.warning("Agent 2 exiting early: invalid or missing threat_centroid %s", threat_centroid)
+        return proposals
+
     # ── Step 1: Structured query — suppliers outside threat radius ────
     threat_point = f"POINT({threat_centroid['lon']} {threat_centroid['lat']})"
 
     try:
-        structured_resp = es.search(
+        structured_resp = await run_in_threadpool(
+            es.search,
             index="erp-locations",
             body={
                 "size": 20,
@@ -104,7 +111,8 @@ async def run_procurement_cycle(
     sla_scores: dict[str, float] = {}
     try:
         candidate_ids = [c["location_id"] for c in candidates]
-        lookup_resp = es.search(
+        lookup_resp = await run_in_threadpool(
+            es.search,
             index="supplier-sla-scores",
             body={
                 "size": len(candidate_ids),
@@ -124,7 +132,8 @@ async def run_procurement_cycle(
         )
         # kNN fallback: requires .multilingual-e5-small inference endpoint
         try:
-            knn_resp = es.search(
+            knn_resp = await run_in_threadpool(
+                es.search,
                 index="erp-locations",
                 body={
                     "size": 20,
@@ -226,7 +235,7 @@ async def run_procurement_cycle(
 
         proposal_id = f"prop-{uuid.uuid4().hex[:12]}"
 
-        proposals.append({
+        raw_proposal = {
             "proposal_id": proposal_id,
             "threat_id": threat_id,
             "rank": rank + 1,
@@ -248,7 +257,8 @@ async def run_procurement_cycle(
                 f"{entry['reliability']:.3f}) / {entry['drive_time_min']:.0f}min. "
                 f"Distance from threat: {entry['dist_km']:.0f}km."
             ),
-        })
+        }
+        proposals.append(RerouteProposal(**raw_proposal).model_dump())
 
     logger.info(
         "Procurement cycle produced %d proposals for threat %s. "

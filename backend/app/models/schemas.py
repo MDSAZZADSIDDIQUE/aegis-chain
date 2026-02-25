@@ -51,6 +51,7 @@ class RerouteProposal(BaseModel):
     mapbox_distance_km: float
     reroute_cost_usd: float
     rationale: str
+    route_geometry: dict[str, Any] | None = None
 
 
 class AuditVerdict(BaseModel):
