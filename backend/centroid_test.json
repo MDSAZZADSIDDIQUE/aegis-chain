@@ -1,0 +1,26 @@
+{
+  "count": 36,
+  "first_centroid": {
+    "lat": 40.565291664772204,
+    "lon": -106.9551725688983
+  },
+  "keys": [
+    "threat_id",
+    "source",
+    "event_type",
+    "severity",
+    "certainty",
+    "urgency",
+    "headline",
+    "description",
+    "affected_zone",
+    "centroid",
+    "effective",
+    "expires",
+    "onset",
+    "status",
+    "nws_zone_ids",
+    "raw_payload",
+    "ingested_at"
+  ]
+}

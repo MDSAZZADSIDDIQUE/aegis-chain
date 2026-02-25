@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, useState } from "react";
 import mapboxgl from "mapbox-gl";
 import * as turf from "@turf/turf";
 import type { WeatherThreat, ERPLocation, Proposal } from "@/lib/api";
@@ -86,11 +86,7 @@ export default function AegisGlobe({
         source: "threats",
         paint: {
           "fill-color": ["get", "color"],
-          "fill-opacity": [
-            "case",
-            ["==", ["get", "threat_id"], selectedThreatId || ""], 0.6,
-            0.25
-          ],
+          "fill-opacity": 0.25,
         },
       });
 
@@ -100,11 +96,7 @@ export default function AegisGlobe({
         source: "threats",
         paint: {
           "line-color": ["get", "color"],
-          "line-width": [
-            "case",
-            ["==", ["get", "threat_id"], selectedThreatId || ""], 4,
-            2
-          ],
+          "line-width": 2,
           "line-opacity": 0.8,
           "line-dasharray": [2, 2],
         },
@@ -123,15 +115,11 @@ export default function AegisGlobe({
         paint: {
           "circle-radius": [
             "interpolate", ["linear"], ["zoom"],
-            3, ["case", ["==", ["get", "threat_id"], selectedThreatId || ""], 12, 8],
-            8, ["case", ["==", ["get", "threat_id"], selectedThreatId || ""], 24, 16],
+            3, 8,
+            8, 16,
           ],
           "circle-color": ["get", "color"],
-          "circle-opacity": [
-            "case",
-            ["==", ["get", "threat_id"], selectedThreatId || ""], 0.9,
-            0.6
-          ],
+          "circle-opacity": 0.6,
           "circle-stroke-width": 2,
           "circle-stroke-color": ["get", "color"],
           "circle-stroke-opacity": 0.9,
@@ -309,9 +297,9 @@ export default function AegisGlobe({
   }, [onLocationClick, onThreatClick]);
 
   // ── Update threat polygons ────────────────────────────────────
-  const updateThreats = useCallback(() => {
+  const updateThreats = () => {
     const map = mapRef.current;
-    if (!map || !map.isStyleLoaded()) return;
+    if (!map) return;
 
     const threatSource = map.getSource("threats") as mapboxgl.GeoJSONSource;
     const centroidSource = map.getSource("threat-centroids") as mapboxgl.GeoJSONSource;
@@ -329,6 +317,7 @@ export default function AegisGlobe({
       geometry: t.affected_zone,
     }));
 
+    console.log(`[AegisGlobe] Setting threat source data with ${features.length} features`, features[0]);
     threatSource.setData({ type: "FeatureCollection", features });
 
     const centroidFeatures: GeoJSON.Feature[] = threats
@@ -346,13 +335,14 @@ export default function AegisGlobe({
         },
       }));
 
+    console.log(`[AegisGlobe] Setting threat-centroids data with ${centroidFeatures.length} features`);
     centroidSource.setData({ type: "FeatureCollection", features: centroidFeatures });
-  }, [threats]);
+  };
 
   // ── Update ERP locations ──────────────────────────────────────
-  const updateLocations = useCallback(() => {
+  const updateLocations = () => {
     const map = mapRef.current;
-    if (!map || !map.isStyleLoaded()) return;
+    if (!map) return;
 
     const source = map.getSource("erp-locations") as mapboxgl.GeoJSONSource;
     if (!source) return;
@@ -375,13 +365,14 @@ export default function AegisGlobe({
       },
     }));
 
+    console.log(`[AegisGlobe] Setting erp-locations data with ${features.length} features`, features[0]);
     source.setData({ type: "FeatureCollection", features });
-  }, [locations, highlightedEntities]);
+  };
 
   // ── Update route lines ────────────────────────────────────────
-  const updateRoutes = useCallback(() => {
+  const updateRoutes = () => {
     const map = mapRef.current;
-    if (!map || !map.isStyleLoaded()) return;
+    if (!map) return;
 
     const source = map.getSource("routes") as mapboxgl.GeoJSONSource;
     if (!source) return;
@@ -421,56 +412,84 @@ export default function AegisGlobe({
     }
 
     source.setData({ type: "FeatureCollection", features });
-  }, [routes, locations]);
+  };
 
   // ── Sync data to map when props change ────────────────────────
+  // To bypass ALL React strict-mode mounting and Mapbox `style.load` vs 
+  // `sourcedata` race conditions, we use an interval to continuously 
+  // attempt to sync until the sources are actually ready and the data is loaded.
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
 
-    if (map.isStyleLoaded()) {
-      updateThreats();
-      updateLocations();
-      updateRoutes();
-    } else {
-      map.once("style.load", () => {
+    const interval = setInterval(() => {
+      if (!map.isStyleLoaded()) return; // Wait for style
+
+      let allSourcesReady = true;
+      for (const id of ["threats", "threat-centroids", "erp-locations", "routes"]) {
+        if (!map.getSource(id)) {
+          allSourcesReady = false;
+          break;
+        }
+      }
+
+      if (allSourcesReady) {
+        clearInterval(interval);
+        console.log(`[AegisGlobe] Sources verified ready. Pushing data. threats:${threats.length} locs:${locations.length}`);
         updateThreats();
         updateLocations();
         updateRoutes();
-      });
-    }
-  }, [updateThreats, updateLocations, updateRoutes, selectedThreatId]);
+      }
+    }, 100);
+
+    return () => clearInterval(interval);
+  }, [threats, locations, routes, highlightedEntities]);
 
   // ── Make sure painting reacts to selectedThreatId changes ─────
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !map.isStyleLoaded()) return;
+    if (!map) return;
 
-    map.setPaintProperty("threat-fills", "fill-opacity", [
-      "case",
-      ["==", ["get", "threat_id"], selectedThreatId || ""], 0.6,
-      0.25
-    ]);
+    if (map.getLayer("threat-fills")) {
+      map.setPaintProperty("threat-fills", "fill-opacity", [
+        "case",
+        ["==", ["get", "threat_id"], selectedThreatId || ""], 0.6,
+        0.25
+      ]);
 
-    map.setPaintProperty("threat-borders", "line-width", [
-      "case",
-      ["==", ["get", "threat_id"], selectedThreatId || ""], 4,
-      2
-    ]);
+      map.setPaintProperty("threat-borders", "line-width", [
+        "case",
+        ["==", ["get", "threat_id"], selectedThreatId || ""], 4,
+        2
+      ]);
 
-    map.setPaintProperty("threat-pulse", "circle-radius", [
-      "interpolate", ["linear"], ["zoom"],
-      3, ["case", ["==", ["get", "threat_id"], selectedThreatId || ""], 12, 8],
-      8, ["case", ["==", ["get", "threat_id"], selectedThreatId || ""], 24, 16],
-    ]);
-    
-    map.setPaintProperty("threat-pulse", "circle-opacity", [
-      "case",
-      ["==", ["get", "threat_id"], selectedThreatId || ""], 0.9,
-      0.6
-    ]);
+      map.setPaintProperty("threat-pulse", "circle-radius", [
+        "interpolate", ["linear"], ["zoom"],
+        3, ["case", ["==", ["get", "threat_id"], selectedThreatId || ""], 12, 8],
+        8, ["case", ["==", ["get", "threat_id"], selectedThreatId || ""], 24, 16],
+      ]);
+      
+      map.setPaintProperty("threat-pulse", "circle-opacity", [
+        "case",
+        ["==", ["get", "threat_id"], selectedThreatId || ""], 0.9,
+        0.6
+      ]);
+    }
 
-  }, [selectedThreatId]);
+    // Move camera 
+    if (selectedThreatId) {
+      const threat = threats.find((t) => t.threat_id === selectedThreatId);
+      if (threat?.centroid) {
+        map.flyTo({
+          center: [threat.centroid.lon, threat.centroid.lat],
+          zoom: 5.5,
+          pitch: 45,
+          speed: 1.2,
+          essential: true,
+        });
+      }
+    }
+  }, [selectedThreatId, threats]);
 
   return (
     <div

@@ -245,7 +245,7 @@ export default function ChatToMap({ contextThreatId, onHighlight }: ChatToMapPro
         {/* ── Processing spinner ──────────────────────────────── */}
         {loading && (
           <div className="flex items-baseline gap-3 px-3 py-2 border-b border-stone-900">
-            <span className="text-[9px] text-stone-600 w-16 shrink-0">
+            <span className="text-[9px] text-stone-600 w-16 shrink-0" suppressHydrationWarning>
               {fmtTime(new Date())}
             </span>
             <span className="text-[9px] text-lime-600 w-[68px] shrink-0">AUDITOR-3</span>
@@ -329,7 +329,7 @@ function LogRow({
       {/* ── Primary log line ──────────────────────────────── */}
       <div className="flex items-start gap-3 px-3 py-2">
         {/* Timestamp */}
-        <span className="text-[9px] text-stone-700 w-16 shrink-0 pt-px">
+        <span className="text-[9px] text-stone-700 w-16 shrink-0 pt-px" suppressHydrationWarning>
           {fmtTime(entry.ts)}
         </span>
 

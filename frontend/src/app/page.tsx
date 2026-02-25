@@ -182,7 +182,7 @@ export default function DashboardPage() {
         {/* ── Active threat log ────────────────────────────── */}
         <SectionHeader label="ACTIVE THREAT EVENTS" count={state?.active_threats.length} />
 
-        <div className="flex-1 overflow-y-auto">
+        <div className="flex-1 min-h-[300px] overflow-y-auto">
           {state?.active_threats.length === 0 && (
             <div className="px-4 py-3 font-mono text-[10px] text-stone-600">
               NO ACTIVE EVENTS DETECTED
@@ -205,13 +205,13 @@ export default function DashboardPage() {
                 {/* Row 1: code + severity badge + time */}
                 <div className="flex items-center gap-1.5 mb-0.5">
                   <span className="font-mono text-[10px] font-bold text-stone-300">
-                    {EVENT_CODE[t.event_type] ?? "EVT"}
+                    {EVENT_CODE[t.event_type] ?? "UNK"}
                   </span>
                   <span
                     className="font-mono text-[8px] uppercase px-1 py-px"
-                    style={{ background: SEV_COLOR[t.severity], color: "#0c0a09", borderRadius: "1px" }}
+                    style={{ background: SEV_COLOR[t.severity] ?? SEV_COLOR.unknown, color: "#0c0a09", borderRadius: "1px" }}
                   >
-                    {t.severity}
+                    {t.severity || "unknown"}
                   </span>
                   <span className="font-mono text-[9px] text-stone-600 ml-auto">
                     {new Date(t.ingested_at).toLocaleTimeString([], { hour12: false, hour: "2-digit", minute: "2-digit" })}
@@ -235,22 +235,24 @@ export default function DashboardPage() {
         {state?.pending_proposals && state.pending_proposals.length > 0 && (
           <>
             <SectionHeader label="AWAITING APPROVAL" count={state.pending_proposals.length} accent="text-amber-500" />
-            {state.pending_proposals.map((p) => (
-              <div
-                key={p.proposal_id}
-                className="px-3 py-2 border-b border-stone-800"
-                style={{ borderLeft: "2px solid #f59e0b" }}
-              >
-                <div className="flex items-baseline gap-1.5 mb-0.5">
-                  <span className="font-mono text-[10px] font-bold text-amber-400">HITL</span>
-                  <span className="font-mono text-[9px] text-stone-400 truncate">{p.proposed_supplier_name}</span>
+            <div className="overflow-y-auto max-h-[30vh]">
+              {state.pending_proposals.map((p) => (
+                <div
+                  key={p.proposal_id}
+                  className="px-3 py-2 border-b border-stone-800"
+                  style={{ borderLeft: "2px solid #f59e0b" }}
+                >
+                  <div className="flex items-baseline gap-1.5 mb-0.5">
+                    <span className="font-mono text-[10px] font-bold text-amber-400">HITL</span>
+                    <span className="font-mono text-[9px] text-stone-400 truncate">{p.proposed_supplier_name}</span>
+                  </div>
+                  <div className="flex gap-3">
+                    <MetaPair label="COST" value={`$${p.reroute_cost_usd.toLocaleString()}`} />
+                    <MetaPair label="SCORE" value={p.attention_score.toFixed(4)} />
+                  </div>
                 </div>
-                <div className="flex gap-3">
-                  <MetaPair label="COST" value={`$${p.reroute_cost_usd.toLocaleString()}`} />
-                  <MetaPair label="SCORE" value={p.attention_score.toFixed(4)} />
-                </div>
-              </div>
-            ))}
+              ))}
+            </div>
           </>
         )}
 

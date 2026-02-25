@@ -13,9 +13,9 @@
 // Surfaces suppliers whose delay trend is accelerating (bottleneck signal).
 // The 72-hour lookback feeds the ML anomaly job's 72h lookahead window.
 
-FROM supply-latency-logs
+TS supply-latency-logs
 | WHERE @timestamp >= NOW() - 72 HOURS
-| EVAL bucket = DATE_TRUNC(6 HOURS, @timestamp)
+| EVAL bucket = BUCKET(@timestamp, 6 HOURS)
 | STATS
     avg_delay        = AVG(delay_hours),
     max_delay        = MAX(delay_hours),
@@ -43,7 +43,7 @@ FROM supply-latency-logs
 // ── Phase A.2: Trend Detection — Compare current 24h vs prior 48h ───────────
 // Identifies suppliers whose delays are *worsening* (acceleration signal).
 
-FROM supply-latency-logs
+TS supply-latency-logs
 | WHERE @timestamp >= NOW() - 72 HOURS
 | EVAL period = CASE(
     @timestamp >= NOW() - 24 HOURS, "recent_24h",
