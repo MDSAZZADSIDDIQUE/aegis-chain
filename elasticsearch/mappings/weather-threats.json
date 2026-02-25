@@ -38,6 +38,8 @@
       },
       "affected_zone": {
         "type": "geo_shape",
+        "orientation": "RIGHT",
+        "ignore_malformed": true,
         "meta": {
           "description": "GeoJSON polygon of threat area (ST_INTERSECTS)."
         }

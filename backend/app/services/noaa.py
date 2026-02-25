@@ -13,6 +13,7 @@ from typing import Any
 import httpx
 from shapely.geometry import shape, mapping
 from shapely.ops import unary_union
+from shapely.validation import make_valid
 
 from app.core.config import settings
 
@@ -115,6 +116,13 @@ async def fetch_noaa_alerts() -> list[dict[str, Any]]:
                     continue
 
                 merged = unary_union(zone_geoms)
+                # Ensure the geometry is valid, unclosed rings are closed,
+                # and internal self-intersections are resolved.
+                if not merged.is_valid:
+                    merged = make_valid(merged)
+                
+                # Elasticsearch expects GeoJSON [Longitude, Latitude] order.
+                # Shapely and GeoJSON mapping already follow this.
                 affected_zone = mapping(merged)
 
             # Compute centroid

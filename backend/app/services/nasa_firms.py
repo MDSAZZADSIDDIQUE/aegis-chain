@@ -17,6 +17,7 @@ from typing import Any
 import httpx
 import numpy as np
 from shapely.geometry import MultiPoint, mapping
+from shapely.validation import make_valid
 
 from app.core.config import settings
 
@@ -125,7 +126,13 @@ async def fetch_firms_fires() -> list[dict[str, Any]]:
                 mp = MultiPoint([(p[0], p[1]) for p in cluster_pts])
                 poly = mp.convex_hull.buffer(CLUSTER_BUFFER_DEG)
 
+            # Ensure the geometry is valid and rings are properly closed
+            if not poly.is_valid:
+                poly = make_valid(poly)
+
             centroid = poly.centroid
+            # Elasticsearch requires GeoJSON [Longitude, Latitude] order.
+            # Shapely and mapping() already output this correctly.
             affected_zone = mapping(poly)
 
             # Aggregate cluster metadata
