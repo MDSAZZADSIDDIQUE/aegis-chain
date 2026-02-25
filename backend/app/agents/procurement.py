@@ -4,10 +4,17 @@ Uses LOOKUP JOIN to merge semantic SLA search with structured reliability
 metrics. Filters out suppliers within 100km of the threat via ST_DISTANCE.
 Pings Mapbox for actual drive time. Computes Attention Score.
 
-Attention Score formula:
-  A_i = softmax(
-    (Reliability_i * SLA_Match_i) / sqrt(d_km_i)
-  ) * (1 / drive_time_hours_i)
+Attention Score formula
+-----------------------
+    A_i = (Vector_Similarity_i × Reliability_Index_i) / Live_Drive_Time_Minutes_i
+
+Where:
+  Vector_Similarity  — cosine similarity from kNN SLA embedding search (or
+                       precomputed sla_score from supplier-sla-scores index),
+                       normalised to [0, 1].
+  Reliability_Index  — supplier reliability from erp-locations, [0, 1].
+  Live_Drive_Time_Minutes — real-time Mapbox driving duration in minutes,
+                            routing around the active threat polygon.
 """
 
 from __future__ import annotations
@@ -16,8 +23,6 @@ import logging
 import math
 import uuid
 from typing import Any
-
-import numpy as np
 
 from app.core.elastic import get_es_client
 from app.services.mapbox import get_route
@@ -36,14 +41,6 @@ PROCUREMENT_ESQL = """FROM erp-locations
 | LIMIT 20
 | KEEP location_id, name, coordinates, reliability_index, avg_lead_time_hours,
        contract_sla, inventory_value_usd, dist_km, sla_score, sla_tier"""
-
-
-def _softmax(scores: list[float]) -> list[float]:
-    """Numerically stable softmax."""
-    arr = np.array(scores, dtype=np.float64)
-    shifted = arr - np.max(arr)
-    exp_vals = np.exp(shifted)
-    return (exp_vals / exp_vals.sum()).tolist()
 
 
 async def run_procurement_cycle(
@@ -157,11 +154,12 @@ async def run_procurement_cycle(
             logger.warning("kNN SLA fallback also failed: %s", exc2)
 
     # ── Step 3: Mapbox drive times + Attention Score ─────────────────
+    # A_i = (Vector_Similarity_i × Reliability_Index_i) / Live_Drive_Time_Minutes_i
     origin_coords = origin_location.get("coordinates", {})
     origin_lat = origin_coords.get("lat", 0)
     origin_lon = origin_coords.get("lon", 0)
 
-    raw_attention: list[dict[str, Any]] = []
+    scored: list[dict[str, Any]] = []
 
     for supplier in candidates[:10]:  # Top 10 to limit API calls
         loc_id = supplier["location_id"]
@@ -192,44 +190,34 @@ async def run_procurement_cycle(
             drive_distance_km = dist_km * 1.3  # estimate
             route_geometry = None
 
-        drive_time_hours = max(drive_time_min / 60.0, 0.01)
-
         reliability = supplier.get("reliability_index", 0.5)
-        sla_match = sla_scores.get(loc_id, 0.5)
+        vector_similarity = sla_scores.get(loc_id, 0.5)
 
-        # Attention score numerator: (Reliability * SLA_Match) / sqrt(dist_km)
-        numerator = (reliability * sla_match) / math.sqrt(max(dist_km, 1.0))
+        # Attention = (Vector_Similarity × Reliability_Index) / Live_Drive_Time_Minutes
+        attention_score = (
+            (vector_similarity * reliability)
+            / max(drive_time_min, 0.1)
+        )
 
-        raw_attention.append({
+        scored.append({
             "supplier": supplier,
-            "numerator": numerator,
-            "drive_time_hours": drive_time_hours,
+            "attention_score": attention_score,
             "drive_time_min": drive_time_min,
             "drive_distance_km": drive_distance_km,
             "route_geometry": route_geometry,
             "dist_km": dist_km,
             "reliability": reliability,
-            "sla_match": sla_match,
+            "vector_similarity": vector_similarity,
         })
 
-    if not raw_attention:
+    if not scored:
         return proposals
 
-    # Apply softmax to numerators
-    numerators = [r["numerator"] for r in raw_attention]
-    softmax_weights = _softmax(numerators)
-
-    # Final attention score: softmax_weight * (1 / drive_time_hours)
-    for i, entry in enumerate(raw_attention):
-        entry["attention_score"] = (
-            softmax_weights[i] * (1.0 / entry["drive_time_hours"])
-        )
-
     # Sort by attention score descending
-    raw_attention.sort(key=lambda x: x["attention_score"], reverse=True)
+    scored.sort(key=lambda x: x["attention_score"], reverse=True)
 
     # Build proposals
-    for rank, entry in enumerate(raw_attention[:5]):
+    for rank, entry in enumerate(scored[:5]):
         supplier = entry["supplier"]
         # Estimate reroute cost (simplified: base + distance premium)
         base_cost = supplier.get("inventory_value_usd", 10000) * 0.05
@@ -247,7 +235,7 @@ async def run_procurement_cycle(
             "proposed_supplier_name": supplier["name"],
             "attention_score": round(entry["attention_score"], 6),
             "reliability_index": entry["reliability"],
-            "sla_match_score": round(entry["sla_match"], 4),
+            "vector_similarity": round(entry["vector_similarity"], 4),
             "distance_from_threat_km": round(entry["dist_km"], 2),
             "mapbox_drive_time_minutes": round(entry["drive_time_min"], 2),
             "mapbox_distance_km": round(entry["drive_distance_km"], 2),
@@ -255,9 +243,10 @@ async def run_procurement_cycle(
             "reroute_cost_usd": round(reroute_cost, 2),
             "rationale": (
                 f"Supplier '{supplier['name']}' selected with attention score "
-                f"{entry['attention_score']:.6f}. Reliability: {entry['reliability']:.3f}, "
-                f"SLA match: {entry['sla_match']:.3f}, Distance from threat: "
-                f"{entry['dist_km']:.0f}km, Drive time: {entry['drive_time_min']:.0f}min."
+                f"{entry['attention_score']:.6f}. "
+                f"A = (V×R)/T = ({entry['vector_similarity']:.3f} × "
+                f"{entry['reliability']:.3f}) / {entry['drive_time_min']:.0f}min. "
+                f"Distance from threat: {entry['dist_km']:.0f}km."
             ),
         })
 

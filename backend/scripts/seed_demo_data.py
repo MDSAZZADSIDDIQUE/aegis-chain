@@ -2,7 +2,9 @@
 AegisChain Demo Data Seeder
 ============================
 
-Inserts 50 realistic US agricultural ERP nodes into `erp-locations`
+Inserts 50 realistic US agricultural ERP nodes into `erp-locations`,
+6 synthetic weather threats into `weather-threats` (with polygons that
+cover the seeded ERP nodes so the pipeline always produces results),
 and 90 days of synthetic `supply-latency-logs` with realistic delay
 distributions.  Without this, the globe shows a blank map.
 
@@ -12,6 +14,7 @@ Usage (from the `backend/` directory):
     python -m scripts.seed_demo_data --force        # wipe & re-seed
     python -m scripts.seed_demo_data --dry-run      # preview counts, no writes
     python -m scripts.seed_demo_data --locations-only
+    python -m scripts.seed_demo_data --threats-only
     python -m scripts.seed_demo_data --logs-only
 
 Requirements:
@@ -804,6 +807,209 @@ ERP_NODES = _deduped
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# DEMO WEATHER THREATS — synthetic threats whose polygons cover the ERP nodes
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# These ensure the Watcher Agent always produces threat_correlations on a cold
+# start, so the full pipeline can demonstrate end-to-end autonomous operation.
+
+DEMO_THREATS: list[dict] = [
+    {
+        "threat_id": "demo-winter-storm-central-plains",
+        "source": "noaa",
+        "event_type": "winter_storm",
+        "severity": "severe",
+        "certainty": "likely",
+        "urgency": "expected",
+        "headline": "Winter Storm Warning — Heavy snow and ice across Central Plains",
+        "description": (
+            "A powerful winter storm system is moving across Kansas, Nebraska, "
+            "and Iowa producing 8-14 inches of snow with ice accumulations up to "
+            "0.5 inches. Travel is strongly discouraged on I-70, I-80, and I-35 "
+            "corridors. Grain elevator operations and truck logistics will be "
+            "severely impacted for 48-72 hours."
+        ),
+        "affected_zone": {
+            "type": "Polygon",
+            "coordinates": [[
+                [-102.0, 37.0], [-91.0, 37.0], [-91.0, 43.5],
+                [-102.0, 43.5], [-102.0, 37.0],
+            ]],
+        },
+        "centroid": {"lat": 40.25, "lon": -96.5},
+        "status": "active",
+    },
+    {
+        "threat_id": "demo-hurricane-watch-gulf-coast",
+        "source": "noaa",
+        "event_type": "hurricane",
+        "severity": "extreme",
+        "certainty": "possible",
+        "urgency": "future",
+        "headline": "Hurricane Watch — Gulf Coast from Corpus Christi to Mobile",
+        "description": (
+            "A tropical system in the Gulf of Mexico is expected to strengthen to "
+            "hurricane force within 48 hours. Storm surge of 6-10 feet possible "
+            "along the coast. Port operations at Houston, New Orleans, and Mobile "
+            "should prepare for suspension. Barge traffic on the Mississippi River "
+            "corridor may be halted."
+        ),
+        "affected_zone": {
+            "type": "Polygon",
+            "coordinates": [[
+                [-98.0, 27.0], [-87.0, 27.0], [-87.0, 31.5],
+                [-98.0, 31.5], [-98.0, 27.0],
+            ]],
+        },
+        "centroid": {"lat": 29.25, "lon": -92.5},
+        "status": "active",
+    },
+    {
+        "threat_id": "demo-wildfire-california-central-valley",
+        "source": "noaa",
+        "event_type": "wildfire",
+        "severity": "severe",
+        "certainty": "observed",
+        "urgency": "immediate",
+        "headline": "Red Flag Warning — California Central Valley and Sierra Foothills",
+        "description": (
+            "Extreme fire weather conditions with offshore winds gusting to 60 mph "
+            "and single-digit relative humidity. Active wildfire complexes threaten "
+            "cold-chain distribution infrastructure in the San Joaquin and "
+            "Sacramento Valleys. Air quality advisories in effect for Fresno, "
+            "Bakersfield, and Modesto."
+        ),
+        "affected_zone": {
+            "type": "Polygon",
+            "coordinates": [[
+                [-122.5, 34.5], [-117.5, 34.5], [-117.5, 39.0],
+                [-122.5, 39.0], [-122.5, 34.5],
+            ]],
+        },
+        "centroid": {"lat": 36.75, "lon": -120.0},
+        "status": "active",
+    },
+    {
+        "threat_id": "demo-tornado-watch-southern-plains",
+        "source": "noaa",
+        "event_type": "tornado",
+        "severity": "extreme",
+        "certainty": "possible",
+        "urgency": "expected",
+        "headline": "Tornado Watch — Oklahoma, Texas Panhandle, and Western Missouri",
+        "description": (
+            "Conditions are favourable for supercell thunderstorms capable of "
+            "producing strong tornadoes (EF2+), destructive hail up to 3 inches, "
+            "and damaging winds exceeding 80 mph. Several grain elevators and "
+            "warehouse facilities are in the watch area."
+        ),
+        "affected_zone": {
+            "type": "Polygon",
+            "coordinates": [[
+                [-103.0, 33.0], [-94.0, 33.0], [-94.0, 37.5],
+                [-103.0, 37.5], [-103.0, 33.0],
+            ]],
+        },
+        "centroid": {"lat": 35.25, "lon": -98.5},
+        "status": "active",
+    },
+    {
+        "threat_id": "demo-flood-warning-mississippi-corridor",
+        "source": "noaa",
+        "event_type": "flood",
+        "severity": "moderate",
+        "certainty": "likely",
+        "urgency": "expected",
+        "headline": "Flood Warning — Mississippi River from Memphis to New Orleans",
+        "description": (
+            "The Mississippi River is expected to reach major flood stage at "
+            "Memphis and Baton Rouge within 72 hours. Barge traffic is restricted. "
+            "Low-lying port and warehouse facilities should activate flood "
+            "contingency plans."
+        ),
+        "affected_zone": {
+            "type": "Polygon",
+            "coordinates": [[
+                [-92.5, 29.0], [-88.0, 29.0], [-88.0, 36.0],
+                [-92.5, 36.0], [-92.5, 29.0],
+            ]],
+        },
+        "centroid": {"lat": 32.5, "lon": -90.25},
+        "status": "active",
+    },
+    {
+        "threat_id": "demo-thunderstorm-great-lakes",
+        "source": "noaa",
+        "event_type": "severe_thunderstorm",
+        "severity": "moderate",
+        "certainty": "likely",
+        "urgency": "immediate",
+        "headline": "Severe Thunderstorm Warning — Great Lakes Region",
+        "description": (
+            "A line of severe thunderstorms with embedded rotation is crossing "
+            "the Great Lakes states. Damaging winds up to 70 mph and large hail "
+            "expected. Chicago intermodal operations, Milwaukee port, and Detroit "
+            "logistics park may experience delays."
+        ),
+        "affected_zone": {
+            "type": "Polygon",
+            "coordinates": [[
+                [-89.0, 40.5], [-82.0, 40.5], [-82.0, 44.5],
+                [-89.0, 44.5], [-89.0, 40.5],
+            ]],
+        },
+        "centroid": {"lat": 42.5, "lon": -85.5},
+        "status": "active",
+    },
+]
+
+# Mapping: threat_id → list of ERP location_ids inside that threat polygon.
+# Used to set weather_threat_id on supply-latency-logs with cause == "weather".
+_THREAT_ZONE_MEMBERS: dict[str, list[str]] = {
+    "demo-winter-storm-central-plains": [
+        "loc-ks-hutchinson", "loc-ks-dodge-city", "loc-ks-salina",
+        "loc-ia-ames", "loc-ia-sioux-city", "loc-ia-cedar-rapids",
+        "loc-ne-lincoln", "loc-ne-columbus",
+        "loc-il-bloomington", "loc-il-peoria",
+        "loc-mo-st-joseph",
+    ],
+    "demo-hurricane-watch-gulf-coast": [
+        "loc-tx-houston-port", "loc-tx-corpus-christi", "loc-tx-beaumont",
+        "loc-la-new-orleans", "loc-la-baton-rouge",
+        "loc-ms-gulfport", "loc-al-mobile",
+    ],
+    "demo-wildfire-california-central-valley": [
+        "loc-ca-fresno", "loc-ca-bakersfield", "loc-ca-modesto",
+        "loc-ca-stockton", "loc-ca-salinas",
+        "loc-ca-sacramento", "loc-ca-san-jose",
+    ],
+    "demo-tornado-watch-southern-plains": [
+        "loc-ok-oklahoma-city", "loc-tx-amarillo",
+        "loc-ks-hutchinson", "loc-ks-dodge-city",
+        "loc-mo-st-joseph",
+    ],
+    "demo-flood-warning-mississippi-corridor": [
+        "loc-la-new-orleans", "loc-la-baton-rouge",
+        "loc-ms-gulfport", "loc-tn-memphis",
+        "loc-ms-jackson", "loc-al-mobile",
+    ],
+    "demo-thunderstorm-great-lakes": [
+        "loc-il-chicago", "loc-il-bloomington", "loc-il-peoria",
+        "loc-wi-milwaukee", "loc-mi-detroit",
+        "loc-oh-toledo", "loc-oh-columbus",
+        "loc-in-indianapolis",
+    ],
+}
+
+# Reverse lookup: location_id → threat_id (first match).
+_LOCATION_TO_THREAT: dict[str, str] = {}
+for _tid, _locs in _THREAT_ZONE_MEMBERS.items():
+    for _loc in _locs:
+        if _loc not in _LOCATION_TO_THREAT:
+            _LOCATION_TO_THREAT[_loc] = _tid
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Lookup tables for log generation
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -936,6 +1142,72 @@ def seed_erp_locations(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Weather-threats seeder
+# ─────────────────────────────────────────────────────────────────────────────
+
+def seed_weather_threats(
+    es: Elasticsearch,
+    force: bool = False,
+    dry_run: bool = False,
+) -> int:
+    """Index DEMO_THREATS into weather-threats.  Returns number of docs written.
+
+    Synthetic threats have polygons that cover the seeded ERP nodes so the
+    Watcher Agent always finds threat_correlations on a cold start.
+    """
+    if force and not dry_run:
+        try:
+            es.delete_by_query(
+                index="weather-threats",
+                body={"query": {"prefix": {"threat_id": "demo-"}}},
+                refresh=True,
+            )
+            print("  Wiped existing demo weather-threats documents.")
+        except Exception as exc:
+            print(f"  Warning: could not wipe demo threats: {exc}")
+    elif not force:
+        try:
+            count = es.count(
+                index="weather-threats",
+                body={"query": {"prefix": {"threat_id": "demo-"}}},
+            )["count"]
+            if count > 0:
+                print(f"  Skipping: {count} demo threats already in weather-threats "
+                      "(use --force to re-seed).")
+                return 0
+        except Exception:
+            pass
+
+    now = datetime.now(timezone.utc)
+    actions = []
+    for threat in DEMO_THREATS:
+        doc = {
+            **threat,
+            "effective": (now - timedelta(hours=6)).isoformat(),
+            "expires": (now + timedelta(hours=72)).isoformat(),
+            "onset": (now - timedelta(hours=3)).isoformat(),
+            "nws_zone_ids": [],
+            "raw_payload": {},
+            "ingested_at": now.isoformat(),
+        }
+        actions.append({
+            "_index": "weather-threats",
+            "_id": threat["threat_id"],
+            "_source": doc,
+        })
+
+    if dry_run:
+        print(f"  [dry-run] would index {len(actions)} demo weather-threat documents")
+        return len(actions)
+
+    success, errors = es_bulk(es, actions, raise_on_error=False, refresh=True)
+    if errors:
+        print(f"  Warning: {len(errors)} bulk errors during weather-threats seeding")
+    print(f"  Indexed {success} demo weather-threat documents.")
+    return success
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Supply-latency-logs seeder
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1015,7 +1287,11 @@ def _generate_log_doc(
         "delay_hours":            delay_hours,
         "shipment_value_usd":     shipment_value,
         "disruption_cause":       cause,
-        "weather_threat_id":      None,
+        "weather_threat_id":      (
+            _LOCATION_TO_THREAT.get(dest_node["location_id"])
+            or _LOCATION_TO_THREAT.get(supplier_node["location_id"])
+            if cause == "weather" else None
+        ),
         "transport_mode":         mode,
         "carrier":                carrier,
         "cost_usd":               cost_usd,
@@ -1135,8 +1411,8 @@ def seed_supply_latency_logs(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="AegisChain demo data seeder — populates erp-locations and "
-                    "supply-latency-logs for a live globe view.",
+        description="AegisChain demo data seeder — populates erp-locations, "
+                    "weather-threats, and supply-latency-logs for a live globe view.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
@@ -1149,11 +1425,15 @@ def main() -> None:
     )
     parser.add_argument(
         "--locations-only", action="store_true",
-        help="Seed only erp-locations (skip latency logs).",
+        help="Seed only erp-locations (skip threats and latency logs).",
+    )
+    parser.add_argument(
+        "--threats-only", action="store_true",
+        help="Seed only weather-threats (skip locations and latency logs).",
     )
     parser.add_argument(
         "--logs-only", action="store_true",
-        help="Seed only supply-latency-logs (skip ERP locations).",
+        help="Seed only supply-latency-logs (skip locations and threats).",
     )
     parser.add_argument(
         "--days", type=int, default=90,
@@ -1191,16 +1471,26 @@ def main() -> None:
     # Ensure indices exist
     print("\n  Ensuring indices …")
     _ensure_index(es, "erp-locations",       "erp-locations.json")
+    _ensure_index(es, "weather-threats",     "weather-threats.json")
     _ensure_index(es, "supply-latency-logs", "supply-latency-logs.json")
 
-    seed_locations = not args.logs_only
-    seed_logs      = not args.locations_only
+    # Determine which data sets to seed
+    only_flag = args.locations_only or args.threats_only or args.logs_only
+    seed_locations = args.locations_only or not only_flag
+    seed_threats   = args.threats_only   or not only_flag
+    seed_logs      = args.logs_only      or not only_flag
 
     # ── ERP Locations ─────────────────────────────────────────────────────
     if seed_locations:
         print(f"\n  Seeding erp-locations ({len(ERP_NODES)} nodes) …")
         n_locs = seed_erp_locations(es, force=args.force, dry_run=args.dry_run)
         print(f"  Done: {n_locs} location document(s) processed.")
+
+    # ── Weather Threats ───────────────────────────────────────────────────
+    if seed_threats:
+        print(f"\n  Seeding weather-threats ({len(DEMO_THREATS)} demo threats) …")
+        n_threats = seed_weather_threats(es, force=args.force, dry_run=args.dry_run)
+        print(f"  Done: {n_threats} threat document(s) processed.")
 
     # ── Supply-latency-logs ───────────────────────────────────────────────
     if seed_logs:

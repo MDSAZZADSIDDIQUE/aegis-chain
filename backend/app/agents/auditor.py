@@ -47,7 +47,7 @@ async def evaluate_proposal(proposal: dict[str, Any]) -> dict[str, Any]:
     reliability = proposal.get("reliability_index", 0.5)
     cost = proposal.get("reroute_cost_usd", 0)
     drive_time = proposal.get("mapbox_drive_time_minutes", 999)
-    sla_match = proposal.get("sla_match_score", 0.5)
+    sla_match = proposal.get("vector_similarity", proposal.get("sla_match_score", 0.5))
 
     # ── Reflection Step 1: Score each dimension ──────────────────────
     # Normalize drive time (lower is better, cap at 600 min)

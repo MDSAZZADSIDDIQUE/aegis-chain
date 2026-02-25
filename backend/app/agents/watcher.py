@@ -8,32 +8,98 @@ ST_INTERSECTS. Outputs a ranked list of locations with $ value at risk.
 from __future__ import annotations
 
 import logging
+from collections import defaultdict
 from typing import Any
 
 from app.core.elastic import get_es_client
 
 logger = logging.getLogger("aegis.agent.watcher")
 
-# ES|QL query: predictive bucketing over supply-latency-logs
-# + intersection with active weather threats
-WATCHER_ESQL_RISK_ASSESSMENT = """FROM supply-latency-logs
+# ── ES|QL queries ────────────────────────────────────────────────────────────
+
+# Predictive bucketing over supply-latency-logs using the TS source command.
+# TS (ES 8.14+) is the native TSDS source command — it replaces FROM for
+# time-series data streams, leveraging TSID-aware optimisations and the
+# routing_path dimensions (location_id, supplier_id).
+#
+# BUCKET(@timestamp, 6 HOURS) slices the 72-hour window into 12 buckets so
+# downstream Python can detect delay *acceleration* (latest bucket vs overall
+# average), which is the "predictive" signal.
+WATCHER_ESQL_TS_BUCKETS = """TS supply-latency-logs
 | WHERE @timestamp >= NOW() - 72 HOURS
+| EVAL bucket = BUCKET(@timestamp, 6 HOURS)
 | STATS
-    avg_delay     = AVG(delay_hours),
-    max_delay     = MAX(delay_hours),
+    avg_delay      = AVG(delay_hours),
+    max_delay      = MAX(delay_hours),
     shipment_count = COUNT(*),
     total_value    = SUM(shipment_value_usd)
-  BY location_id, supplier_id
-| WHERE avg_delay > 2.0
-| SORT avg_delay DESC
-| LIMIT 50"""
+  BY bucket, location_id, supplier_id
+| SORT bucket DESC, avg_delay DESC
+| LIMIT 500"""
 
+# Geo-intersection: locate ERP nodes inside a threat polygon.
 WATCHER_ESQL_GEO_INTERSECT = """FROM erp-locations
 | WHERE active == true
 | EVAL at_risk = ST_INTERSECTS(coordinates, TO_GEOSHAPE(?::geo_shape))
 | WHERE at_risk == true
 | KEEP location_id, name, type, coordinates, inventory_value_usd, reliability_index
 | SORT inventory_value_usd DESC"""
+
+
+def _aggregate_ts_buckets(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse per-bucket TS rows into per-entity predictions with trend.
+
+    Groups rows by ``(location_id, supplier_id)``, computes weighted-average
+    delay, total value, and compares the **latest** 6-hour bucket to the
+    entity average.  A ≥ 10 % increase flags ``"accelerating"`` — the
+    predictive signal that a bottleneck is worsening.
+
+    Only entities with overall ``avg_delay > 2.0`` hours are returned (same
+    threshold as the previous flat query).  Results are capped at 50.
+    """
+    entities: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        key = (row.get("location_id", ""), row.get("supplier_id", ""))
+        entities[key].append(row)
+
+    predictions: list[dict[str, Any]] = []
+    for (location_id, supplier_id), buckets in entities.items():
+        buckets.sort(key=lambda b: b.get("bucket", ""))
+
+        total_shipments = sum(b.get("shipment_count") or 0 for b in buckets)
+        total_value     = sum(b.get("total_value") or 0 for b in buckets)
+
+        weighted_delay = sum(
+            (b.get("avg_delay") or 0) * (b.get("shipment_count") or 0)
+            for b in buckets
+        )
+        avg_delay = weighted_delay / max(total_shipments, 1)
+        max_delay = max((b.get("max_delay") or 0) for b in buckets)
+
+        # Trend: compare latest bucket to entity-wide average
+        latest_delay = buckets[-1].get("avg_delay") or 0
+        if avg_delay > 0 and latest_delay > avg_delay * 1.1:
+            trend = "accelerating"
+        elif avg_delay > 0 and latest_delay < avg_delay * 0.9:
+            trend = "decelerating"
+        else:
+            trend = "stable"
+
+        if avg_delay > 2.0:
+            predictions.append({
+                "location_id":         location_id,
+                "supplier_id":         supplier_id,
+                "avg_delay":           round(avg_delay, 2),
+                "max_delay":           round(max_delay, 2),
+                "shipment_count":      total_shipments,
+                "total_value":         round(total_value, 2),
+                "ts_buckets":          len(buckets),
+                "trend":               trend,
+                "latest_bucket_delay": round(latest_delay, 2),
+            })
+
+    predictions.sort(key=lambda p: p["avg_delay"], reverse=True)
+    return predictions[:50]
 
 
 def _composite_risk(delay_hours: float, ml_score: float | None) -> float:
@@ -72,13 +138,17 @@ async def run_watcher_cycle() -> dict[str, Any]:
         "threat_correlations": [],
     }
 
-    # ── Step 1: Predictive bucketing ─────────────────────────────────────────
+    # ── Step 1: Predictive bucketing via TS command ─────────────────────────
     try:
-        ts_result = es.esql.query(query=WATCHER_ESQL_RISK_ASSESSMENT)
+        ts_result = es.esql.query(query=WATCHER_ESQL_TS_BUCKETS)
         columns = [col.name for col in ts_result.columns]
-        predictions = [dict(zip(columns, row)) for row in ts_result.values]
+        bucket_rows = [dict(zip(columns, row)) for row in ts_result.values]
+        predictions = _aggregate_ts_buckets(bucket_rows)
         results["bottleneck_predictions"] = predictions
-        logger.info("Watcher found %d bottleneck predictions", len(predictions))
+        logger.info(
+            "Watcher TS bucketing: %d raw buckets → %d entity predictions",
+            len(bucket_rows), len(predictions),
+        )
     except Exception as exc:
         logger.error("Watcher TS query failed: %s", exc)
         predictions = []

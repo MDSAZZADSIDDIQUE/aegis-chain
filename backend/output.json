@@ -1,0 +1,26 @@
+{
+  "health": {
+    "status": "ok",
+    "service": "aegis-chain",
+    "elasticsearch": "connected",
+    "es_version": "8.11.0",
+    "sse_subscribers": 0,
+    "ws_clients": 0
+  },
+  "ingest": {
+    "noaa_alerts": 30,
+    "firms_clusters": 0,
+    "indexed": 30
+  },
+  "pipeline": {
+    "watcher": {
+      "bottleneck_count": 0,
+      "at_risk_locations": 0,
+      "total_value_at_risk": 0.0,
+      "threat_correlations": 0
+    },
+    "procurement": [],
+    "auditor": [],
+    "actions_taken": []
+  }
+}
