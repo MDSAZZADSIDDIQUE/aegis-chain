@@ -65,6 +65,21 @@ export default function AegisGlobe({
     });
 
     map.on("style.load", () => {
+      // ── Load Custom SVG Icons ───────────────────────────────────
+      const loadIcon = (id: string, svg: string) => {
+        const img = new Image(24, 24);
+        img.onload = () => {
+          if (!map.hasImage(id)) map.addImage(id, img);
+        };
+        img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+      };
+
+      loadIcon("icon-warehouse", `<svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M3 21V8l9-4 9 4v13 M13 21v-8h-2v8 M9 21v-4H5v4" fill="none" stroke="#020617" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`);
+      loadIcon("icon-supplier", `<svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 21c0-4 2-6 6-8 3-1 4-3 2-6-2-2-5-1-6 2-1 2-2 4-2 12Z M6 22c0-2.5 1.5-4 4-5" fill="none" stroke="#020617" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`);
+      loadIcon("icon-distribution_center", `<svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 5v14M8 9l4-4 4 4M5 12h14M8 15l4 4 4-4" fill="none" stroke="#020617" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`);
+      loadIcon("icon-port", `<svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="5" r="2" fill="none" stroke="#020617" stroke-width="2.5"/><path d="M12 22V7M6 12H3a8 8 0 0 0 18 0h-3M12 22c-2 0-3-1.5-4-3l-2-7M12 22c2 0 3-1.5 4-3l2-7" fill="none" stroke="#020617" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`);
+
+
       // Atmosphere — earthy, deep-field agricultural night sky
       map.setFog({
         color: "rgb(12, 10, 9)",          // stone-950 horizon haze
@@ -139,8 +154,8 @@ export default function AegisGlobe({
         paint: {
           "circle-radius": [
             "interpolate", ["linear"], ["zoom"],
-            3, 5,
-            8, 10,
+            3, 8,
+            8, 14,
           ],
           "circle-color": ["get", "color"],
           "circle-opacity": 0.9,
@@ -154,6 +169,22 @@ export default function AegisGlobe({
             ["get", "highlighted"], "#ffffff",
             ["get", "color"],
           ],
+        },
+      });
+
+      map.addLayer({
+        id: "erp-icons",
+        type: "symbol",
+        source: "erp-locations",
+        layout: {
+          "icon-image": ["concat", "icon-", ["get", "type"]],
+          "icon-size": [
+            "interpolate", ["linear"], ["zoom"],
+            3, 0.45,
+            8, 0.8,
+          ],
+          "icon-allow-overlap": true,
+          "icon-ignore-placement": true,
         },
       });
 
@@ -220,12 +251,14 @@ export default function AegisGlobe({
       });
 
       // ── Click handlers ──────────────────────────────────────────
-      map.on("click", "erp-points", (e) => {
-        if (!e.features?.[0]) return;
-        const props = e.features[0].properties;
-        if (onLocationClick && props) {
-          onLocationClick(props as unknown as ERPLocation);
-        }
+      ["erp-points", "erp-icons"].forEach(layer => {
+        map.on("click", layer, (e) => {
+          if (!e.features?.[0]) return;
+          const props = e.features[0].properties;
+          if (onLocationClick && props) {
+            onLocationClick(props as unknown as ERPLocation);
+          }
+        });
       });
 
       map.on("click", "threat-fills", (e) => {
@@ -237,11 +270,13 @@ export default function AegisGlobe({
       });
 
       // Cursor changes
-      map.on("mouseenter", "erp-points", () => {
-        map.getCanvas().style.cursor = "pointer";
-      });
-      map.on("mouseleave", "erp-points", () => {
-        map.getCanvas().style.cursor = "";
+      ["erp-points", "erp-icons"].forEach(layer => {
+        map.on("mouseenter", layer, () => {
+          map.getCanvas().style.cursor = "pointer";
+        });
+        map.on("mouseleave", layer, () => {
+          map.getCanvas().style.cursor = "";
+        });
       });
       map.on("mouseenter", "threat-fills", () => {
         map.getCanvas().style.cursor = "pointer";
@@ -256,34 +291,36 @@ export default function AegisGlobe({
         closeOnClick: false,
       });
 
-      map.on("mouseenter", "erp-points", (e) => {
-        if (!e.features?.[0]) return;
-        const p = e.features[0].properties!;
-        const coords = (e.features[0].geometry as GeoJSON.Point).coordinates.slice() as [number, number];
-        popup
-          .setLngLat(coords)
-          .setHTML(
-            `<div style="font-family:'JetBrains Mono',monospace;font-size:10px;line-height:1.8;min-width:180px;">
-              <div style="font-size:11px;font-weight:700;color:#e7e5e4;margin-bottom:6px;letter-spacing:0.02em;">
-                ${p.name}
-              </div>
-              <div style="color:#78716c;font-size:9px;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:4px;">
-                ${(p.type as string).replace("_"," ")}
-              </div>
-              <div style="display:grid;grid-template-columns:auto 1fr;gap:2px 8px;">
-                <span style="color:#78716c;font-size:9px;">RELIABILITY</span>
-                <span style="color:#a3e635;">${Number(p.reliability_index).toFixed(3)}</span>
-                <span style="color:#78716c;font-size:9px;">INV VALUE</span>
-                <span style="color:#a3e635;">$${Number(p.inventory_value_usd).toLocaleString()}</span>
-                <span style="color:#78716c;font-size:9px;">LEAD TIME</span>
-                <span style="color:#a3e635;">${Number(p.avg_lead_time_hours ?? 0).toFixed(1)}h</span>
-              </div>
-            </div>`
-          )
-          .addTo(map);
-      });
+      ["erp-points", "erp-icons"].forEach(layer => {
+        map.on("mouseenter", layer, (e) => {
+          if (!e.features?.[0]) return;
+          const p = e.features[0].properties!;
+          const coords = (e.features[0].geometry as GeoJSON.Point).coordinates.slice() as [number, number];
+          popup
+            .setLngLat(coords)
+            .setHTML(
+              `<div style="font-family:'JetBrains Mono',monospace;font-size:10px;line-height:1.8;min-width:180px;">
+                <div style="font-size:11px;font-weight:700;color:#e7e5e4;margin-bottom:6px;letter-spacing:0.02em;">
+                  ${p.name}
+                </div>
+                <div style="color:#78716c;font-size:9px;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:4px;">
+                  ${(p.type as string).replace("_"," ")}
+                </div>
+                <div style="display:grid;grid-template-columns:auto 1fr;gap:2px 8px;">
+                  <span style="color:#78716c;font-size:9px;">RELIABILITY</span>
+                  <span style="color:#a3e635;">${Number(p.reliability_index).toFixed(3)}</span>
+                  <span style="color:#78716c;font-size:9px;">INV VALUE</span>
+                  <span style="color:#a3e635;">$${Number(p.inventory_value_usd).toLocaleString()}</span>
+                  <span style="color:#78716c;font-size:9px;">LEAD TIME</span>
+                  <span style="color:#a3e635;">${Number(p.avg_lead_time_hours ?? 0).toFixed(1)}h</span>
+                </div>
+              </div>`
+            )
+            .addTo(map);
+        });
 
-      map.on("mouseleave", "erp-points", () => popup.remove());
+        map.on("mouseleave", layer, () => popup.remove());
+      });
     });
 
     map.addControl(new mapboxgl.NavigationControl(), "top-right");
