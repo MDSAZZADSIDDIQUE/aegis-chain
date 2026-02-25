@@ -36,6 +36,24 @@ MIN_CONFIDENCE = 50
 CLUSTER_BUFFER_DEG = 0.15  # ~16.7 km
 
 
+def _parse_confidence(conf_raw: str) -> int:
+    """Map FIRMS confidence field to 0-100 integer.
+    Handles MODIS (0-100) and VIIRS (l/n/h).
+    """
+    conf_raw = conf_raw.lower().strip()
+    if conf_raw == "h":
+        return 100
+    elif conf_raw == "n":
+        return 70
+    elif conf_raw == "l":
+        return 30
+    else:
+        try:
+            return int(conf_raw.rstrip("%"))
+        except ValueError:
+            return 0
+
+
 def _cluster_fires(
     points: list[tuple[float, float]],
     eps_deg: float = 0.25,
@@ -93,10 +111,7 @@ async def fetch_firms_fires() -> list[dict[str, Any]]:
         # Filter by confidence
         valid_rows = []
         for row in rows:
-            try:
-                conf = int(row.get("confidence", "0").rstrip("%"))
-            except ValueError:
-                conf = 0
+            conf = _parse_confidence(row.get("confidence", "0"))
             if conf >= MIN_CONFIDENCE:
                 valid_rows.append(row)
 
@@ -147,7 +162,7 @@ async def fetch_firms_fires() -> list[dict[str, Any]]:
                 float(r.get("frp", 0) or 0) for r in cluster_rows
             ]) if cluster_rows else 0.0
             avg_conf = np.mean([
-                float(r.get("confidence", "0").rstrip("%") or 0)
+                _parse_confidence(r.get("confidence", "0"))
                 for r in cluster_rows
             ]) if cluster_rows else 0.0
 
