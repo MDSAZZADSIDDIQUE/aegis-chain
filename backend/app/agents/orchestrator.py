@@ -55,6 +55,9 @@ async def run_full_pipeline(emit: EmitFn = None) -> dict[str, Any]:
         "actions_taken": [],
     }
 
+    # Signal pipeline start to frontend HUD
+    await _emit({"agent": "pipeline", "status": "running"})
+
     # ── Agent 1: Watcher ─────────────────────────────────────────────
     logger.info("=== Pipeline: Running Agent 1 (Watcher) ===")
     await _emit({"agent": "watcher", "status": "running"})

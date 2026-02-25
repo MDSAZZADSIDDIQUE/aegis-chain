@@ -174,7 +174,7 @@ async def evaluate_proposal(proposal: dict[str, Any]) -> dict[str, Any]:
         "confidence": confidence,
         "cost_usd": cost,
         "requires_hitl": requires_hitl,
-        "hitl_status": "pending" if requires_hitl else ("auto_approved" if approved else "rejected"),
+        "hitl_status": "awaiting_approval" if requires_hitl else ("auto_approved" if approved else "rejected"),
         "rl_adjustment": round(rl_adjustment, 4),
         "explanation": " ".join(explanation_parts),
         "reflection_scores": {

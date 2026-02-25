@@ -1,19 +1,24 @@
 "use client";
 
-import { useEffect, useState, useCallback, type FormEvent } from "react";
+import { useEffect, useState, useCallback, useRef, type FormEvent } from "react";
 import dynamic from "next/dynamic";
 import ChatToMap from "@/components/chat/ChatToMap";
 import GlobeErrorBoundary from "@/components/map/GlobeErrorBoundary";
+import PipelineTelemetry from "@/components/dashboard/PipelineTelemetry";
+import RLOverlay from "@/components/dashboard/RLOverlay";
 import {
   fetchDashboardState,
   triggerPipeline,
   triggerIngest,
   subscribeToEvents,
+  subscribePipelineProgress,
   createERPLocation,
   type DashboardState,
   type WeatherThreat,
   type ERPLocation,
   type ERPLocationUpsert,
+  type PipelineProgressEvent,
+  type Proposal,
 } from "@/lib/api";
 
 const AegisGlobe = dynamic(() => import("@/components/map/AegisGlobe"), {
@@ -55,14 +60,19 @@ export default function DashboardPage() {
   const [state, setState] = useState<DashboardState | null>(null);
   const [highlighted, setHighlighted] = useState<string[]>([]);
   const [selectedThreat, setSelectedThreat] = useState<WeatherThreat | null>(null);
+  const [selectedRoute, setSelectedRoute] = useState<Proposal | null>(null);
   const [running, setRunning] = useState<"idle" | "ingest" | "pipeline">("idle");
   const [error, setError] = useState<string | null>(null);
   const [lastSync, setLastSync] = useState<Date | null>(null);
+  const [pipelineMetrics, setPipelineMetrics] = useState({ approved: 0, hitl: 0 });
+
+  const stateRef = useRef<DashboardState | null>(null);
 
   const loadState = useCallback(async () => {
     try {
       const data = await fetchDashboardState();
       setState(data);
+      stateRef.current = data;
       setLastSync(new Date());
       setError(null);
     } catch {
@@ -80,11 +90,24 @@ export default function DashboardPage() {
       () => { /* connection errors are normal during backend restart — ignore */ }
     );
 
+    // Pipeline progress WebSocket for granular HUD updates
+    const closeWS = subscribePipelineProgress((ev: PipelineProgressEvent) => {
+      if (ev.agent === "auditor" && ev.status === "complete") {
+        setPipelineMetrics({
+          approved: ev.approved ?? 0,
+          hitl: ev.hitl ?? 0,
+        });
+        // Immediately refresh state to pull the new arcs
+        loadState();
+      }
+    });
+
     // 5-minute fallback poll in case SSE drops silently
     const interval = setInterval(loadState, POLL_MS);
 
     return () => {
       closeSSE();
+      closeWS();
       clearInterval(interval);
     };
   }, [loadState]);
@@ -103,10 +126,16 @@ export default function DashboardPage() {
     setRunning("idle");
   };
 
-  const handleLocationClick = (loc: ERPLocation) => setHighlighted([loc.location_id]);
-  const handleThreatClick = (threat: WeatherThreat) => setSelectedThreat(threat);
+  const handleLocationClick = useCallback((loc: ERPLocation) => setHighlighted([loc.location_id]), []);
+  const handleThreatClick = useCallback((threat: WeatherThreat) => {
+    setSelectedThreat(threat);
+    setSelectedRoute(null);
+  }, []);
+
 
   const var_millions = ((state?.total_value_at_risk ?? 0) / 1_000_000).toFixed(2);
+  const reroutes_count = (state?.active_routes.length ?? 0) + pipelineMetrics.approved;
+  const has_pending = (state?.pending_proposals.length ?? 0) > 0 || pipelineMetrics.hitl > 0;
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-stone-950 text-stone-200">
@@ -237,10 +266,14 @@ export default function DashboardPage() {
             <SectionHeader label="AWAITING APPROVAL" count={state.pending_proposals.length} accent="text-amber-500" />
             <div className="overflow-y-auto max-h-[30vh]">
               {state.pending_proposals.map((p) => (
-                <div
+                <button
                   key={p.proposal_id}
-                  className="px-3 py-2 border-b border-stone-800"
-                  style={{ borderLeft: "2px solid #f59e0b" }}
+                  onClick={() => { setSelectedRoute(p); setSelectedThreat(null); }}
+                  className="w-full text-left px-3 py-2 border-b border-stone-800 hover:bg-stone-800 transition-colors"
+                  style={{ 
+                    borderLeft: "2px solid #f59e0b",
+                    background: selectedRoute?.proposal_id === p.proposal_id ? "#292524" : "transparent"
+                  }}
                 >
                   <div className="flex items-baseline gap-1.5 mb-0.5">
                     <span className="font-mono text-[10px] font-bold text-amber-400">HITL</span>
@@ -250,7 +283,7 @@ export default function DashboardPage() {
                     <MetaPair label="COST" value={`$${p.reroute_cost_usd.toLocaleString()}`} />
                     <MetaPair label="SCORE" value={p.attention_score.toFixed(4)} />
                   </div>
-                </div>
+                </button>
               ))}
             </div>
           </>
@@ -289,6 +322,10 @@ export default function DashboardPage() {
             onThreatClick={handleThreatClick}
           />
         </GlobeErrorBoundary>
+        
+        {/* Top UI Elements */}
+        <PipelineTelemetry />
+        <RLOverlay proposal={selectedRoute} onClose={() => setSelectedRoute(null)} />
 
         {/* ── Bottom-left HUD strip ─────────────────────────── */}
         <div
@@ -298,12 +335,12 @@ export default function DashboardPage() {
           <span
             className="w-1.5 h-1.5 rounded-full"
             style={{
-              background: error ? "#dc2626" : "#a3e635",
-              boxShadow: error ? "0 0 5px #dc2626" : "0 0 5px #a3e635",
+              background: error ? "#dc2626" : (has_pending ? "#f59e0b" : "#a3e635"),
+              boxShadow: error ? "0 0 5px #dc2626" : (has_pending ? "0 0 5px #f59e0b" : "0 0 5px #a3e635"),
             }}
           />
           <span className="font-mono text-[10px] text-stone-400 uppercase tracking-wider">
-            {error ? "DISCONNECTED" : "SATELLITE FEED LIVE"}
+            {error ? "DISCONNECTED" : (has_pending ? "AWAITING APPROVAL" : "SATELLITE FEED LIVE")}
           </span>
           <span className="w-px h-3 bg-stone-700" />
           <span className="font-mono text-[10px] text-stone-500">
@@ -312,6 +349,10 @@ export default function DashboardPage() {
           <span className="w-px h-3 bg-stone-700" />
           <span className="font-mono text-[10px] text-orange-500">
             ${var_millions}M VAR
+          </span>
+          <span className="w-px h-3 bg-stone-700" />
+          <span className="font-mono text-[10px] text-lime-400">
+            {reroutes_count} REROUTES PREVENTED
           </span>
         </div>
 

@@ -33,7 +33,7 @@ def upsert_proposal(doc: dict[str, Any]) -> None:
 
     doc.setdefault("created_at", now)
     doc.setdefault("@timestamp", doc["created_at"])
-    doc.setdefault("hitl_status", "pending")
+    doc.setdefault("hitl_status", "awaiting_approval")
     doc["updated_at"] = now
 
     try:

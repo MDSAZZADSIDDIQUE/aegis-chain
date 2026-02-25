@@ -44,6 +44,16 @@ export default function AegisGlobe({
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const initializedRef = useRef(false);
+  
+  // Keep handlers in refs so map listeners always use latest version 
+  // without needing to re-initialize the entire map.
+  const onLocationClickRef = useRef(onLocationClick);
+  const onThreatClickRef = useRef(onThreatClick);
+
+  useEffect(() => {
+    onLocationClickRef.current = onLocationClick;
+    onThreatClickRef.current = onThreatClick;
+  }, [onLocationClick, onThreatClick]);
 
   // ── Initialize map ──────────────────────────────────────────────
   useEffect(() => {
@@ -264,8 +274,8 @@ export default function AegisGlobe({
         map.on("click", layer, (e) => {
           if (!e.features?.[0]) return;
           const props = e.features[0].properties;
-          if (onLocationClick && props) {
-            onLocationClick(props as unknown as ERPLocation);
+          if (onLocationClickRef.current && props) {
+            onLocationClickRef.current(props as unknown as ERPLocation);
           }
         });
       });
@@ -273,8 +283,8 @@ export default function AegisGlobe({
       map.on("click", "threat-fills", (e) => {
         if (!e.features?.[0]) return;
         const props = e.features[0].properties;
-        if (onThreatClick && props) {
-          onThreatClick(props as unknown as WeatherThreat);
+        if (onThreatClickRef.current && props) {
+          onThreatClickRef.current(props as unknown as WeatherThreat);
         }
       });
 
@@ -330,6 +340,33 @@ export default function AegisGlobe({
 
         map.on("mouseleave", layer, () => popup.remove());
       });
+
+      // ── Map Animations ──────────────────────────────────────────
+      let animationId: number;
+      function animate() {
+        if (!map || !map.isStyleLoaded()) return;
+        const now = Date.now();
+        
+        // Threat Pulse (3 sec cycle)
+        if (map.getLayer("threat-pulse")) {
+          const t1 = (now % 3000) / 3000;
+          const radiusMult = 1 + t1 * 1.5;
+          const mapZoom = map.getZoom();
+          const baseRadius = mapZoom < 6 ? 6 : 12;
+          map.setPaintProperty("threat-pulse", "circle-radius", baseRadius * radiusMult);
+          map.setPaintProperty("threat-pulse", "circle-opacity", 0.8 * (1 - t1));
+        }
+
+        // Route Pulse (2 sec cycle)
+        if (map.getLayer("route-lines")) {
+          const t2 = (now % 2000) / 2000;
+          const width = 2.5 + Math.sin(t2 * Math.PI * 2) * 1.5;
+          map.setPaintProperty("route-lines", "line-width", width);
+        }
+
+        animationId = requestAnimationFrame(animate);
+      }
+      animate();
     });
 
     map.addControl(new mapboxgl.NavigationControl(), "top-right");
@@ -340,7 +377,7 @@ export default function AegisGlobe({
       map.remove();
       initializedRef.current = false;
     };
-  }, [onLocationClick, onThreatClick]);
+  }, []); // Only initialize once on mount
 
   // ── Update threat polygons ────────────────────────────────────
   const updateThreats = () => {

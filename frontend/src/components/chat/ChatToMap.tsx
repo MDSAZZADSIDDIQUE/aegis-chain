@@ -42,6 +42,20 @@ function fmtTime(d: Date) {
   return d.toLocaleTimeString([], { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
+function TypewriterText({ text, speed = 8 }: { text: string; speed?: number }) {
+  const [displayed, setDisplayed] = useState("");
+  useEffect(() => {
+    let i = 0;
+    const interval = setInterval(() => {
+      setDisplayed(text.slice(0, i));
+      i++;
+      if (i > text.length) clearInterval(interval);
+    }, speed);
+    return () => clearInterval(interval);
+  }, [text, speed]);
+  return <>{displayed}</>;
+}
+
 /** Try to extract key-value pairs from agent response text for structured display. */
 function extractKVPairs(text: string): Record<string, string> | undefined {
   const result: Record<string, string> = {};
@@ -350,12 +364,12 @@ function LogRow({
             </p>
           ) : (
             <>
-              {/* System / Error: plain mono text */}
+              {/* System / Error: plain mono text, Auditor: typewriter */}
               <p
-                className="text-[11px] leading-relaxed whitespace-pre-wrap"
+                className={`text-[11px] leading-relaxed whitespace-pre-wrap ${entry.role === "error" ? "animate-pulse font-bold tracking-widest" : ""}`}
                 style={{ color: entry.role === "error" ? "#fca5a5" : "#a8a29e" }}
               >
-                {entry.text}
+                {entry.role === "auditor" ? <TypewriterText text={entry.text} /> : entry.text}
               </p>
 
               {/* Structured KV block for agent decisions */}
