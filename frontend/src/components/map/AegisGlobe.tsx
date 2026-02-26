@@ -542,16 +542,12 @@ export default function AegisGlobe({
   };
 
   // ── Sync data to map when props change ────────────────────────
-  // To bypass ALL React strict-mode mounting and Mapbox `style.load` vs 
-  // `sourcedata` race conditions, we use an interval to continuously 
-  // attempt to sync until the sources are actually ready and the data is loaded.
+  // This effect ensures that the map updates whenever the data props change.
   useEffect(() => {
     const map = mapRef.current;
-    if (!map) return;
+    if (!map || !styleLoaded) return;
 
-    const interval = setInterval(() => {
-      if (!map.isStyleLoaded()) return; // Wait for style
-
+    const syncData = () => {
       let allSourcesReady = true;
       for (const id of ["threats", "threat-centroids", "erp-locations", "routes"]) {
         if (!map.getSource(id)) {
@@ -561,16 +557,15 @@ export default function AegisGlobe({
       }
 
       if (allSourcesReady) {
-        clearInterval(interval);
-        console.log(`[AegisGlobe] Sources verified ready. Pushing data. threats:${threatsRef.current.length} locs:${locationsRef.current.length}`);
+        console.log(`[AegisGlobe] Syncing data props. threats:${threats.length} locs:${locations.length} routes:${routes.length}`);
         updateThreats();
         updateLocations();
         updateRoutes();
       }
-    }, 100);
+    };
 
-    return () => clearInterval(interval);
-  }, []); // Empty dependency array—runs once, uses refs for latest data
+    syncData();
+  }, [threats, locations, routes, highlightedEntities, styleLoaded]);
 
   // ── Make sure painting reacts to selectedThreatId changes ─────
   useEffect(() => {

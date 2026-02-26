@@ -28,13 +28,17 @@ def get_es_client() -> Elasticsearch:
             _client = Elasticsearch(
                 cloud_id=settings.elastic_cloud_id,
                 api_key=settings.elastic_api_key,
-                request_timeout=30,
+                request_timeout=60,
+                retry_on_timeout=True,
+                max_retries=3,
             )
         else:
             _client = Elasticsearch(
                 hosts=[settings.elastic_url],
                 api_key=settings.elastic_api_key,
-                request_timeout=30,
+                request_timeout=60,
+                retry_on_timeout=True,
+                max_retries=3,
             )
     return _client
 
