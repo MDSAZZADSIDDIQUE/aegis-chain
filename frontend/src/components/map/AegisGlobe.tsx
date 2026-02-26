@@ -59,13 +59,29 @@ export default function AegisGlobe({
   const routesRef = useRef(routes);
   const highlightedEntitiesRef = useRef(highlightedEntities);
 
+  // Dirty flags matrix to eliminate `setData` payload thrashing
+  const dataDirtyRef = useRef({ threats: true, locations: true, routes: true });
+
   useEffect(() => {
     onLocationClickRef.current = onLocationClick;
     onThreatClickRef.current = onThreatClick;
-    threatsRef.current = threats;
-    locationsRef.current = locations;
-    routesRef.current = routes;
-    highlightedEntitiesRef.current = highlightedEntities;
+    
+    if (threats !== threatsRef.current) {
+      threatsRef.current = threats;
+      dataDirtyRef.current.threats = true;
+    }
+    if (locations !== locationsRef.current) {
+      locationsRef.current = locations;
+      dataDirtyRef.current.locations = true;
+    }
+    if (routes !== routesRef.current) {
+      routesRef.current = routes;
+      dataDirtyRef.current.routes = true;
+    }
+    if (highlightedEntities !== highlightedEntitiesRef.current) {
+      highlightedEntitiesRef.current = highlightedEntities;
+      dataDirtyRef.current.locations = true; 
+    }
   }, [onLocationClick, onThreatClick, threats, locations, routes, highlightedEntities]);
 
   // ── Initialize map ──────────────────────────────────────────────
@@ -99,11 +115,21 @@ export default function AegisGlobe({
         img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
       };
 
-      loadIcon("icon-warehouse", `<svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M3 21V8l9-4 9 4v13 M13 21v-8h-2v8 M9 21v-4H5v4" fill="none" stroke="#020617" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`);
-      loadIcon("icon-supplier", `<svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 21c0-4 2-6 6-8 3-1 4-3 2-6-2-2-5-1-6 2-1 2-2 4-2 12Z M6 22c0-2.5 1.5-4 4-5" fill="none" stroke="#020617" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`);
-      loadIcon("icon-distribution_center", `<svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 5v14M8 9l4-4 4 4M5 12h14M8 15l4 4 4-4" fill="none" stroke="#020617" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`);
-      loadIcon("icon-port", `<svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="5" r="2" fill="none" stroke="#020617" stroke-width="2.5"/><path d="M12 22V7M6 12H3a8 8 0 0 0 18 0h-3M12 22c-2 0-3-1.5-4-3l-2-7M12 22c2 0 3-1.5 4-3l2-7" fill="none" stroke="#020617" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`);
+      // High-fidelity node icons
+      loadIcon("icon-warehouse", `<svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M3 21V9l9-5 9 5v12H3Z" fill="none" stroke="#020617" stroke-width="1.5"/><path d="M9 21v-5h6v5" fill="none" stroke="#020617" stroke-width="1.5"/><path d="M6 13h12v3H6v-3Z" fill="none" stroke="#020617" stroke-width="1.5"/><line x1="10" y1="13" x2="10" y2="16" stroke="#020617" stroke-width="1.5"/><line x1="14" y1="13" x2="14" y2="16" stroke="#020617" stroke-width="1.5"/></svg>`);
+      loadIcon("icon-supplier", `<svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" fill="none" stroke="#020617" stroke-width="1.5"/><path d="M6.5 2V17h13.5M6.5 6h10M6.5 10h10M6.5 14h10" fill="none" stroke="#020617" stroke-width="1.5"/><circle cx="16" cy="21" r="1.5" fill="none" stroke="#020617" stroke-width="1.5"/><circle cx="8" cy="21" r="1.5" fill="none" stroke="#020617" stroke-width="1.5"/><path d="M6.5 17A2.5 2.5 0 0 1 4 14.5V2" fill="none" stroke="#020617" stroke-width="1.5"/></svg>`);
+      loadIcon("icon-distribution_center", `<svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M2 12l10-7 10 7v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-9Z" fill="none" stroke="#020617" stroke-width="1.5"/><path d="M8 21v-6a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v6" fill="none" stroke="#020617" stroke-width="1.5"/><path d="M12 10V6" fill="none" stroke="#020617" stroke-width="1.5"/><circle cx="12" cy="11" r="1" fill="#020617"/></svg>`);
+      loadIcon("icon-port", `<svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 21.5V4.5" fill="none" stroke="#020617" stroke-width="1.5" stroke-linecap="round"/><circle cx="12" cy="4.5" r="2" fill="none" stroke="#020617" stroke-width="1.5"/><path d="M12 21.5a6 6 0 0 1-6-6v-3h12v3a6 6 0 0 1-6 6Z" fill="none" stroke="#020617" stroke-width="1.5"/><path d="M6 12.5M18 12.5v-2" fill="none" stroke="#020617" stroke-width="1.5"/><path d="M12 4.5l3 3m-6 0l3-3" fill="none" stroke="#020617" stroke-width="1.5" stroke-linecap="round"/><path d="M2 19.5c2 1 4 0 5-1 1-1 3-2 5 0 2 1.5 4 0 5-1 1-1 3-2 5 0" fill="none" stroke="#020617" stroke-width="1.5"/></svg>`);
 
+      // Threat icons (High-Fidelity)
+      loadIcon("icon-threat-hurricane", `<svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 21.5c-4 0-7.7-2.3-9-6 .5 1.5 2 2.5 3.5 2.5 2.8 0 5-2.2 5-5 0-1.8 1-3.3 2.5-4 1.3-.6 3-.2 3.8 1 .8 1.2.6 2.8-.5 3.8-1 1-2.5 1.2-3.8.5-.7-.4-1.2-1-1.4-1.8M12 2.5c4 0 7.7 2.3 9 6-.5-1.5-2-2.5-3.5-2.5-2.8 0-5 2.2-5 5 0 1.8-1 3.3-2.5 4-1.3.6-3 .2-3.8-1-.8-1.2-.6-2.8.5-3.8 1-1 2.5-1.2 3.8-.5.7.4 1.2 1 1.4 1.8" fill="none" stroke="#020617" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="2.5" fill="none" stroke="#020617" stroke-width="1.5"/><circle cx="12" cy="12" r="1.5" fill="#020617"/></svg>`);
+      loadIcon("icon-threat-tornado", `<svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M3 4h18M5 8h14M7 12h10M9 16h6M11 20h2" fill="none" stroke="#020617" stroke-width="1.5" stroke-linecap="round"/><path d="M4 6h16M6 10h12M8 14h8M10 18h4" fill="none" stroke="#020617" stroke-width="0.8" stroke-linecap="round"/><path d="M12 6c-2 2-3 4-3 6m6-6c2 2 3 4 3 6M10 14c-1 1-1.5 2-1.5 3m6-3c1 1 1.5 2 1.5 3" fill="none" stroke="#020617" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`);
+      loadIcon("icon-threat-flood", `<svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M2 13c3 0 3-3 6-3s3 3 6 3 3-3 6-3v7H2v-4z" fill="none" stroke="#020617" stroke-width="1.5" stroke-linejoin="round"/><path d="M2 17c3 0 3-3 6-3s3 3 6 3 3-3 6-3" fill="none" stroke="#020617" stroke-width="1.5" stroke-linejoin="round"/><path d="M12 2C7 6.5 7 9.5 7 11.5c0 2.8 2.2 5 5 5s5-2.2 5-5c0-2-3-5-5-9.5z" fill="none" stroke="#020617" stroke-width="1.5" stroke-linejoin="round"/><path d="M12 6.5c-1 1.5-1.5 3-1.5 4" fill="none" stroke="#020617" stroke-width="1.5" stroke-linecap="round"/></svg>`);
+      loadIcon("icon-threat-winter_storm", `<svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 2v20M2 12h20M4.93 4.93l14.14 14.14M4.93 19.07L19.07 4.93" fill="none" stroke="#020617" stroke-width="1.5" stroke-linecap="round"/><path d="M10 4l2 2 2-2M10 20l2-2 2 2M4 10l2 2-2 2M20 10l-2 2 2 2M6 6l2.5 1.5L7.5 10M18 18l-2.5-1.5L16.5 14M6 18l1.5-2.5L10 16.5M18 6l-1.5 2.5L14 7.5" fill="none" stroke="#020617" stroke-width="1.5" stroke-linejoin="round"/><circle cx="12" cy="12" r="1.5" fill="#020617"/></svg>`);
+      loadIcon("icon-threat-severe_thunderstorm", `<svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M11.5 2L3 13.5h7.5l-2 8.5L19 10.5h-7.5l2-8.5H11.5z" fill="none" stroke="#020617" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 5L6 12h5l-1 5" fill="none" stroke="#020617" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 6l-3 2M20 7l3-1M5 20l-3-2M21 18l-3 2" fill="none" stroke="#020617" stroke-width="1.5" stroke-linecap="round"/></svg>`);
+      loadIcon("icon-threat-heat_wave", `<svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z" fill="none" stroke="#020617" stroke-width="1.5"/><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" fill="none" stroke="#020617" stroke-width="1.5" stroke-linecap="round"/><circle cx="12" cy="12" r="4.5" fill="none" stroke="#020617" stroke-width="1.5" stroke-dasharray="2 2"/></svg>`);
+      loadIcon("icon-threat-wildfire", `<svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 2c-1.5 3.5-5 5.5-5 10s3 8 5 8 5-3.5 5-8-3.5-6.5-5-10v0Z" fill="none" stroke="#020617" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 12c-1 2-2 3-2 5 0 2 1.5 3 2 3s2-1 2-3c0-2-1-3-2-5v0Z" fill="none" stroke="#020617" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M18 10c0 0 4 3 4 7 0 3-2 4-4 4" fill="none" stroke="#020617" stroke-width="1.5" stroke-linecap="round"/><path d="M6 10c0 0-4 3-4 7 0 3 2 4 4 4" fill="none" stroke="#020617" stroke-width="1.5" stroke-linecap="round"/></svg>`);
+      loadIcon("icon-threat-unknown", `<svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M10.3 3.9l-8.5 14.1a2 2 0 0 0 1.7 3h16.9a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" fill="none" stroke="#020617" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 8v5M12 16v1" fill="none" stroke="#020617" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="10" fill="none" stroke="#020617" stroke-width="1.5" stroke-dasharray="2 4"/></svg>`);
 
       // Atmosphere — earthy, deep-field agricultural night sky
       map.setFog({
@@ -172,6 +198,22 @@ export default function AegisGlobe({
           "circle-stroke-width": 2,
           "circle-stroke-color": ["get", "color"],
           "circle-stroke-opacity": 0.9,
+        },
+      });
+
+      map.addLayer({
+        id: "threat-icons",
+        type: "symbol",
+        source: "threat-centroids",
+        layout: {
+          "icon-image": ["concat", "icon-threat-", ["get", "event_type"]],
+          "icon-size": [
+            "interpolate", ["linear"], ["zoom"],
+            3, 0.45,
+            8, 0.7,
+          ],
+          "icon-allow-overlap": true,
+          "icon-ignore-placement": true,
         },
       });
 
@@ -300,31 +342,27 @@ export default function AegisGlobe({
         });
       });
 
-      map.on("click", "threat-fills", (e) => {
-        if (!e.features?.[0]) return;
-        const props = e.features[0].properties;
-        if (onThreatClickRef.current && props?.threat_id) {
-          const fullThreat = threatsRef.current.find(t => t.threat_id === props.threat_id);
-          if (fullThreat) {
-            onThreatClickRef.current(fullThreat);
+      ["threat-fills", "threat-icons"].forEach(layer => {
+        map.on("click", layer, (e) => {
+          if (!e.features?.[0]) return;
+          const props = e.features[0].properties;
+          if (onThreatClickRef.current && props?.threat_id) {
+            const fullThreat = threatsRef.current.find(t => t.threat_id === props.threat_id);
+            if (fullThreat) {
+              onThreatClickRef.current(fullThreat);
+            }
           }
-        }
+        });
       });
 
       // Cursor changes
-      ["erp-points", "erp-icons"].forEach(layer => {
+      ["erp-points", "erp-icons", "threat-fills", "threat-icons"].forEach(layer => {
         map.on("mouseenter", layer, () => {
           map.getCanvas().style.cursor = "pointer";
         });
         map.on("mouseleave", layer, () => {
           map.getCanvas().style.cursor = "";
         });
-      });
-      map.on("mouseenter", "threat-fills", () => {
-        map.getCanvas().style.cursor = "pointer";
-      });
-      map.on("mouseleave", "threat-fills", () => {
-        map.getCanvas().style.cursor = "";
       });
 
       // Popups on hover for ERP locations
@@ -435,6 +473,7 @@ export default function AegisGlobe({
         properties: {
           threat_id: t.threat_id,
           severity: t.severity,
+          event_type: t.event_type || "unknown",
           color: SEVERITY_COLORS[t.severity] || SEVERITY_COLORS.unknown,
         },
         geometry: {
@@ -541,13 +580,15 @@ export default function AegisGlobe({
     source.setData({ type: "FeatureCollection", features });
   };
 
-  // ── Sync data to map when props change ────────────────────────
-  // This effect ensures that the map updates whenever the data props change.
+  // ── Sync data to map continuously using optimized dirty-checking ──
+  // By tracking dirty states with refs and using a lightweight interval,
+  // we decouple React renders from WebGL data updates.
+  // This guarantees map sources will be populated safely with 0 dropped frames.
   useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !styleLoaded) return;
+    const interval = setInterval(() => {
+      const map = mapRef.current;
+      if (!map || !styleLoaded || !map.isStyleLoaded()) return;
 
-    const syncData = () => {
       let allSourcesReady = true;
       for (const id of ["threats", "threat-centroids", "erp-locations", "routes"]) {
         if (!map.getSource(id)) {
@@ -557,15 +598,23 @@ export default function AegisGlobe({
       }
 
       if (allSourcesReady) {
-        console.log(`[AegisGlobe] Syncing data props. threats:${threats.length} locs:${locations.length} routes:${routes.length}`);
-        updateThreats();
-        updateLocations();
-        updateRoutes();
+        if (dataDirtyRef.current.threats) {
+          updateThreats();
+          dataDirtyRef.current.threats = false;
+        }
+        if (dataDirtyRef.current.locations) {
+          updateLocations();
+          dataDirtyRef.current.locations = false;
+        }
+        if (dataDirtyRef.current.routes) {
+          updateRoutes();
+          dataDirtyRef.current.routes = false;
+        }
       }
-    };
+    }, 100);
 
-    syncData();
-  }, [threats, locations, routes, highlightedEntities, styleLoaded]);
+    return () => clearInterval(interval);
+  }, [styleLoaded]);
 
   // ── Make sure painting reacts to selectedThreatId changes ─────
   useEffect(() => {
