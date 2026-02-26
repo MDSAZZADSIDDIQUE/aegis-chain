@@ -10,14 +10,10 @@ interface RLOverlayProps {
 export default function RLOverlay({ proposal, onClose }: RLOverlayProps) {
   if (!proposal) return null;
 
-  // Simulate or extract RL penalty for display
-  // We know that if there's a penalty, confidence is reduced.
-  // We'll calculate a mock breakdown if actual reflection_scores aren't available in the Proposal type yet,
-  // or use existing fields.
-  const costNorm = Math.max(0, 1 - (proposal.reroute_cost_usd / 100000));
-  const confidence = proposal.attention_score > 0 ? (proposal.attention_score * 0.3 + 0.25 + (costNorm * 0.2)).toFixed(4) : "N/A";
-  
-  // We'll just visualize what we have to give the "AI feeling"
+  // Use real auditor confidence score from the backend (persisted by _persist_verdict)
+  const confidence = proposal.confidence;
+  const confidenceDisplay = confidence != null ? confidence.toFixed(4) : "N/A";
+  const rlAdjustment = proposal.rl_adjustment ?? 0;
   
   return (
     <div className="absolute top-20 right-4 w-96 border border-stone-700 bg-stone-950/90 backdrop-blur-md shadow-2xl z-40 animate-[slide-left_0.3s_ease-out]">
@@ -59,17 +55,25 @@ export default function RLOverlay({ proposal, onClose }: RLOverlayProps) {
               <span className="text-stone-400">Drive Time Penalty (w=0.15)</span>
               <span className="text-amber-400">-{proposal.mapbox_drive_time_minutes.toFixed(0)}m</span>
             </div>
+            {rlAdjustment !== 0 && (
+              <div className="flex justify-between">
+                <span className="text-stone-400">RL Adjustment</span>
+                <span className={rlAdjustment < 0 ? "text-red-400" : "text-lime-400"}>
+                  {rlAdjustment > 0 ? "+" : ""}{rlAdjustment.toFixed(4)}
+                </span>
+              </div>
+            )}
             
             <div className="h-px bg-stone-800 my-1" />
             
             <div className="flex justify-between font-bold">
               <span className="text-stone-300">Composite Confidence</span>
-              <span className="text-white">{confidence}</span>
+              <span className="text-white">{confidenceDisplay}</span>
             </div>
           </div>
         </div>
 
-        {/* RL Penalty Warning (Simulated or Real) */}
+        {/* RL Penalty Warning */}
         {proposal.hitl_status === "awaiting_approval" && (
           <div className="border border-red-900/50 bg-red-950/20 rounded-sm p-3 flex flex-col gap-1 animate-pulse">
             <div className="flex items-center gap-1">
@@ -79,7 +83,7 @@ export default function RLOverlay({ proposal, onClose }: RLOverlayProps) {
               </span>
             </div>
             <p className="font-mono text-[9px] text-red-300/80 leading-relaxed">
-              Vendor reliability index penalized due to historical SLA failures (&gt;30% late delivery rate in 90d window). HITL approval required.
+              {proposal.audit_explanation || "Vendor reliability index penalized due to historical SLA failures. HITL approval required."}
             </p>
           </div>
         )}
@@ -93,7 +97,7 @@ export default function RLOverlay({ proposal, onClose }: RLOverlayProps) {
               </span>
             </div>
             <p className="font-mono text-[9px] text-lime-300/80 leading-relaxed">
-              Confidence threshold met. Cost is under $50,000 limit. No historical RL penalties detected for this vendor.
+              {proposal.audit_explanation || "Confidence threshold met. No historical RL penalties detected for this vendor."}
             </p>
           </div>
         )}

@@ -71,24 +71,31 @@ def _cluster_fires(
         key = (int(lon / eps_deg), int(lat / eps_deg))
         buckets.setdefault(key, []).append((lon, lat))
 
-    # Merge adjacent cells using simple flood fill
+    # Merge adjacent cells using iterative flood fill (BFS)
+    # BUG-012 fix: recursive version overflowed Python stack on large fires
     visited: set[tuple[int, int]] = set()
     clusters: list[list[tuple[float, float]]] = []
 
-    def flood(key: tuple[int, int], acc: list[tuple[float, float]]) -> None:
-        if key in visited or key not in buckets:
-            return
-        visited.add(key)
-        acc.extend(buckets[key])
-        gx, gy = key
-        for dx in (-1, 0, 1):
-            for dy in (-1, 0, 1):
-                flood((gx + dx, gy + dy), acc)
+    def flood(start_key: tuple[int, int]) -> list[tuple[float, float]]:
+        acc: list[tuple[float, float]] = []
+        stack = [start_key]
+        while stack:
+            key = stack.pop()
+            if key in visited or key not in buckets:
+                continue
+            visited.add(key)
+            acc.extend(buckets[key])
+            gx, gy = key
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    neighbor = (gx + dx, gy + dy)
+                    if neighbor not in visited and neighbor in buckets:
+                        stack.append(neighbor)
+        return acc
 
     for key in buckets:
         if key not in visited:
-            cluster: list[tuple[float, float]] = []
-            flood(key, cluster)
+            cluster = flood(key)
             if cluster:
                 clusters.append(cluster)
 
@@ -183,9 +190,11 @@ async def fetch_firms_fires() -> list[dict[str, Any]]:
                 logger.warning("Failed to spatial-project FIRMS cluster: %s", exc)
 
             # Aggregate cluster metadata
+            # BUG-011 fix: use set for O(1) membership checks
+            cluster_pts_set = set(cluster_pts)
             cluster_rows = [
                 row for lon, lat, row in fire_points
-                if (lon, lat) in cluster_pts
+                if (lon, lat) in cluster_pts_set
             ]
             avg_brightness = np.mean([
                 float(r.get("bright_ti4", 0) or 0) for r in cluster_rows

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import AsyncGenerator
 from typing import Any
 
 import anthropic
@@ -176,6 +177,48 @@ async def explain_results(
     except Exception as exc:
         logger.warning("Claude explanation failed: %s — using template fallback", exc)
         return _fallback_explanation(table)
+
+
+async def stream_explanation(
+    question: str,
+    esql_query: str,
+    table: list[dict[str, Any]],
+    context_threat_id: str | None = None,
+) -> AsyncGenerator[str, None]:
+    """Yield text tokens as Claude streams them for real-time chain-of-thought.
+
+    Falls back to a single yield of the template explanation when
+    ANTHROPIC_API_KEY is not configured.
+    """
+    if not settings.anthropic_api_key:
+        logger.debug("No ANTHROPIC_API_KEY — streaming fallback explanation")
+        yield _fallback_explanation(table)
+        return
+
+    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+
+    threat_note = (
+        f"\nActive threat context: {context_threat_id}" if context_threat_id else ""
+    )
+    user_content = (
+        f"Question: {question}{threat_note}\n\n"
+        f"ES|QL query executed:\n{esql_query}\n\n"
+        f"Results ({len(table)} row(s), showing top 10):\n"
+        f"{json.dumps(table[:10], indent=2, default=str)}"
+    )
+
+    try:
+        async with client.messages.stream(
+            model="claude-sonnet-4-6",
+            max_tokens=400,
+            system=_EXPLAIN_SYSTEM,
+            messages=[{"role": "user", "content": user_content}],
+        ) as stream:
+            async for text in stream.text_stream:
+                yield text
+    except Exception as exc:
+        logger.warning("Claude stream failed: %s — falling back", exc)
+        yield _fallback_explanation(table)
 
 
 # ── Fallbacks when Claude API is unavailable ─────────────────────────────────

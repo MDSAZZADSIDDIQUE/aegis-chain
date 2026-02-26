@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -83,7 +84,7 @@ async def ensure_indices() -> None:
          falls back to a regular TSDS index for older ES versions.
     """
     es = get_es_client()
-    info = es.info()
+    info = await asyncio.to_thread(es.info)
     is_serverless = info.get("version", {}).get("build_flavor") == "serverless"
 
     # ── 1. ILM policies ──────────────────────────────────────────────────────
@@ -99,7 +100,7 @@ async def ensure_indices() -> None:
                 continue
             try:
                 body = json.loads(path.read_text())
-                es.ilm.put_lifecycle(name=policy_name, policy=body["policy"])
+                await asyncio.to_thread(es.ilm.put_lifecycle, name=policy_name, policy=body["policy"])
                 logger.info("ILM policy '%s' created/updated", policy_name)
             except Exception as exc:
                 logger.warning("ILM policy '%s' setup failed: %s", policy_name, exc)
@@ -117,7 +118,7 @@ async def ensure_indices() -> None:
                 continue
             try:
                 body = json.loads(path.read_text())
-                es.indices.put_index_template(name=template_name, body=body)
+                await asyncio.to_thread(es.indices.put_index_template, name=template_name, body=body)
                 logger.info("Index template '%s' created/updated", template_name)
             except Exception as exc:
                 logger.warning("Index template '%s' setup failed: %s", template_name, exc)
@@ -135,14 +136,14 @@ async def ensure_indices() -> None:
     }
 
     for index_name, filename in index_files.items():
-        if es.indices.exists(index=index_name):
+        if await asyncio.to_thread(es.indices.exists, index=index_name):
             continue
         body = json.loads((_MAPPINGS_DIR / filename).read_text())
         
         if is_serverless:
             _clean_body_for_serverless(body)
 
-        es.indices.create(index=index_name, body=body)
+        await asyncio.to_thread(es.indices.create, index=index_name, body=body)
         logger.info("Index '%s' created", index_name)
 
     # ── 4. supply-latency-logs — TSDS data stream with ILM ──────────────────
@@ -151,9 +152,9 @@ async def ensure_indices() -> None:
     # Fallback: regular TSDS index for ES versions that pre-date data stream
     # TSDS support (< 8.7).
 
-    if not es.indices.exists(index="supply-latency-logs"):
+    if not await asyncio.to_thread(es.indices.exists, index="supply-latency-logs"):
         try:
-            es.indices.create_data_stream(name="supply-latency-logs")
+            await asyncio.to_thread(es.indices.create_data_stream, name="supply-latency-logs")
             logger.info(
                 "Data stream 'supply-latency-logs' created "
                 "(ILM: supply-latency-logs-ilm, rolls monthly, deletes at 730d)"
@@ -169,7 +170,7 @@ async def ensure_indices() -> None:
                 )
                 if is_serverless:
                     _clean_body_for_serverless(body)
-                es.indices.create(index="supply-latency-logs", body=body)
+                await asyncio.to_thread(es.indices.create, index="supply-latency-logs", body=body)
                 logger.info("Index 'supply-latency-logs' created (fallback path)")
             except Exception as exc2:
                 logger.error("supply-latency-logs creation failed: %s", exc2)

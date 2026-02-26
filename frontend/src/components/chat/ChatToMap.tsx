@@ -2,11 +2,12 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import {
-  sendChatMessage,
-  subscribePipelineProgress,
-  type ChatResponse,
+  streamChatMessage,
+  type ChatStreamMetadata,
   type PipelineProgressEvent,
+  type XRayTarget,
 } from "@/lib/api";
+import { usePipelineProgress } from "@/components/providers/PipelineProgressProvider";
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -25,6 +26,7 @@ interface LogEntry {
 interface ChatToMapProps {
   contextThreatId?: string;
   onHighlight: (entities: string[]) => void;
+  onXray: (targets: XRayTarget[]) => void;
 }
 
 // ── Role display metadata ──────────────────────────────────────────────────
@@ -119,7 +121,7 @@ function formatProgressEvent(ev: PipelineProgressEvent): string {
 
 // ── Component ─────────────────────────────────────────────────────────────
 
-export default function ChatToMap({ contextThreatId, onHighlight }: ChatToMapProps) {
+export default function ChatToMap({ contextThreatId, onHighlight, onXray }: ChatToMapProps) {
   const [log, setLog] = useState<LogEntry[]>([
     {
       id: "boot",
@@ -158,18 +160,17 @@ export default function ChatToMap({ contextThreatId, onHighlight }: ChatToMapPro
     [],
   );
 
-  // ── Pipeline progress WebSocket ─────────────────────────────────────────
+  // ── Pipeline progress from shared context (BUG-008 fix) ────────────────
+  const { lastEvent: pipelineEvent } = usePipelineProgress();
   useEffect(() => {
-    const close = subscribePipelineProgress((ev) => {
-      pushEntry({
-        id:   `ws-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        role: "system",
-        text: formatProgressEvent(ev),
-        ts:   new Date(),
-      });
+    if (!pipelineEvent) return;
+    pushEntry({
+      id:   `ws-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      role: "system",
+      text: formatProgressEvent(pipelineEvent),
+      ts:   new Date(),
     });
-    return close;
-  }, [pushEntry]);
+  }, [pipelineEvent, pushEntry]);
 
   const handleSend = async () => {
     const question = input.trim();
@@ -188,32 +189,92 @@ export default function ChatToMap({ contextThreatId, onHighlight }: ChatToMapPro
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
 
+    // Create a placeholder entry for the agent response — tokens will stream in
+    const agentId = `a-${Date.now()}`;
+    const agentEntry: LogEntry = {
+      id: agentId,
+      role: "auditor",
+      text: "",
+      ts: new Date(),
+    };
+    setLog((prev) => [...prev, agentEntry]);
+
+    // Track whether done has fired to prevent double-fire
+    let doneFired = false;
+
     try {
-      const res: ChatResponse = await sendChatMessage(question, contextThreatId, abortController.signal);
+      await streamChatMessage(
+        question,
+        contextThreatId,
+        {
+          onMeta: (meta: ChatStreamMetadata) => {
+            // Update the placeholder entry with metadata
+            setLog((prev) =>
+              prev.map((e) =>
+                e.id === agentId
+                  ? {
+                      ...e,
+                      esql: meta.esql_query,
+                      highlightedEntities: meta.highlighted_entities,
+                    }
+                  : e
+              )
+            );
 
-      if (abortControllerRef.current === abortController) {
-        abortControllerRef.current = null;
-      }
+            if (meta.highlighted_entities?.length) {
+              onHighlight(meta.highlighted_entities);
+            }
 
-      if (contextThreatId !== latestContextRef.current) {
-        return; // Operator switched threats while LLM was processing. Drop stale response.
-      }
+            // X-Ray Targeting
+            const newXrayTargets: XRayTarget[] = [];
+            meta.map_annotations?.forEach((ann) => {
+              if (ann.type === "highlight_supplier" && typeof ann.supplier_id === "string") {
+                newXrayTargets.push({
+                  location_id: ann.supplier_id,
+                  reason: "highlight",
+                });
+              }
+            });
+            if (newXrayTargets.length > 0) {
+              onXray(newXrayTargets);
+            }
+          },
 
-      const agentEntry: LogEntry = {
-        id: `a-${Date.now()}`,
-        role: "auditor",
-        text: res.answer,
-        esql: res.esql_query,
-        kvPairs: extractKVPairs(res.answer),
-        highlightedEntities: res.highlighted_entities,
-        ts: new Date(),
-      };
-      
-      pushEntry(agentEntry);
+          onToken: (text: string) => {
+            // Append token to the placeholder entry's text
+            setLog((prev) =>
+              prev.map((e) =>
+                e.id === agentId ? { ...e, text: e.text + text } : e
+              )
+            );
+          },
 
-      if (res.highlighted_entities?.length) {
-        onHighlight(res.highlighted_entities);
-      }
+          onDone: () => {
+            if (doneFired) return;
+            doneFired = true;
+            // Extract KV pairs from the completed text
+            setLog((prev) =>
+              prev.map((e) =>
+                e.id === agentId
+                  ? { ...e, kvPairs: extractKVPairs(e.text) }
+                  : e
+              )
+            );
+            setLoading(false);
+          },
+
+          onError: (error: string) => {
+            pushEntry({
+              id: `e-${Date.now()}`,
+              role: "error",
+              text: `STREAM_ERROR — ${error}`,
+              ts: new Date(),
+            });
+            setLoading(false);
+          },
+        },
+        abortController.signal,
+      );
     } catch (err: unknown) {
       if (err instanceof Error && err.name === "AbortError") {
         return;
@@ -224,7 +285,6 @@ export default function ChatToMap({ contextThreatId, onHighlight }: ChatToMapPro
         text: "CONNECTION_REFUSED — backend unreachable on :8000",
         ts: new Date(),
       });
-    } finally {
       setLoading(false);
     }
   };
@@ -397,7 +457,7 @@ function LogRow({
                 className={`text-[11px] leading-relaxed whitespace-pre-wrap break-words ${entry.role === "error" ? "animate-pulse font-bold tracking-widest" : ""}`}
                 style={{ color: entry.role === "error" ? "#fca5a5" : "#a8a29e", wordBreak: "break-word" }}
               >
-                {entry.role === "auditor" ? <TypewriterText text={entry.text} /> : entry.text}
+                {entry.text}
               </p>
 
               {/* Structured KV block for agent decisions */}

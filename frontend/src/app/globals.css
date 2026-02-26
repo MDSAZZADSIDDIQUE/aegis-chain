@@ -139,3 +139,24 @@ input, textarea, pre, code, [data-selectable] {
            hover:bg-lime-950 hover:border-lime-700;
   }
 }
+
+/* ── Missing keyframe animations (BUG-026 / BUG-027) ─────────────────── */
+@keyframes slide-right {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
+
+@keyframes slide-down {
+  0% { opacity: 0; transform: translateY(-10px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slide-left {
+  0% { opacity: 0; transform: translateX(20px); }
+  100% { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes financial-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.75; }
+}

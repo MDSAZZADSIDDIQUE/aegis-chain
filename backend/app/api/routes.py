@@ -35,6 +35,7 @@ from app.services.indexer import update_reliability_index
 from app.services.claude_chat import (
     classify_intent,
     explain_results,
+    stream_explanation,
     ESQL_SUPPLIER_RANKING,
     ESQL_SUPPLIER_RANKING_FALLBACK,
     ESQL_RISK_ASSESSMENT,
@@ -583,6 +584,136 @@ async def chat_to_map(query: ChatQuery):
             "current risk assessment, or active reroutes. Try asking "
             "'Why did you choose Vendor C?' or 'What is the current value at risk?'"
         )
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Chat-to-Map Streaming — real-time chain-of-thought via SSE
+# ─────────────────────────────────────────────────────────────────────
+
+@router.post("/chat/stream")
+async def chat_to_map_stream(query: ChatQuery):
+    """Stream agent explanations token-by-token via Server-Sent Events.
+
+    SSE event types emitted:
+        metadata  — esql_query, highlighted_entities, map_annotations (once)
+        token     — text delta from Claude (many)
+        done      — stream complete (once)
+        error     — on failure (once, optional)
+
+    The client should accumulate all ``token`` payloads to reconstruct the
+    full answer text.
+    """
+    es = get_es_client()
+    intent = await classify_intent(query.question)
+    logger.info("Chat stream intent=%s question=%r", intent, query.question[:80])
+
+    # Resolve ES|QL query and metadata (same logic as /chat)
+    esql_query: str = ""
+    table: list[dict[str, Any]] = []
+    highlighted_entities: list[str] = []
+    map_annotations: list[dict[str, Any]] = []
+
+    if intent == "supplier_ranking":
+        esql_query = ESQL_SUPPLIER_RANKING
+        try:
+            def _query_ranking():
+                res = es.esql.query(query=esql_query)
+                cols = [col.name for col in res.columns]
+                return [dict(zip(cols, row)) for row in res.values]
+            table = await run_in_threadpool(_query_ranking)
+        except Exception:
+            esql_query = ESQL_SUPPLIER_RANKING_FALLBACK
+            def _query_fallback():
+                res = es.esql.query(query=esql_query)
+                cols = [col.name for col in res.columns]
+                return [dict(zip(cols, row)) for row in res.values]
+            table = await run_in_threadpool(_query_fallback)
+        highlighted_entities = [r.get("name", "") for r in table[:3]]
+        map_annotations = [
+            {"type": "highlight_supplier", "supplier_id": r.get("location_id")}
+            for r in table[:5]
+        ]
+
+    elif intent == "risk_assessment":
+        esql_query = ESQL_RISK_ASSESSMENT
+        try:
+            def _query_risk():
+                res = es.esql.query(query=esql_query)
+                cols = [col.name for col in res.columns]
+                return [dict(zip(cols, row)) for row in res.values]
+            table = await run_in_threadpool(_query_risk)
+        except Exception:
+            table = []
+        highlighted_entities = [r.get("event_type", "") for r in table]
+
+    elif intent == "reroute_status":
+        esql_query = ESQL_REROUTE_PROPOSALS
+        approved, _ = await run_in_threadpool(
+            _list_proposals,
+            statuses=["approved", "auto_approved"],
+            size=5,
+            sort_by="created_at",
+            sort_order="desc",
+        )
+        table = approved or []
+        if table:
+            latest = table[0]
+            highlighted_entities = [
+                latest.get("original_supplier_id", ""),
+                latest.get("proposed_supplier_id", ""),
+            ]
+            map_annotations = [{"type": "route", "proposal_id": latest.get("proposal_id")}]
+
+    else:
+        # general intent — no query, no streaming needed
+        async def _general_stream():
+            msg = (
+                "I can help with questions about: supplier selection rationale, "
+                "current risk assessment, or active reroutes. Try asking "
+                "'Why did you choose Vendor C?' or 'What is the current value at risk?'"
+            )
+            yield f"event: metadata\ndata: {json.dumps({'esql_query': None, 'highlighted_entities': [], 'map_annotations': []})}\n\n"
+            yield f"event: token\ndata: {json.dumps({'text': msg})}\n\n"
+            yield "event: done\ndata: {}\n\n"
+        return StreamingResponse(
+            _general_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"},
+        )
+
+    # Build SSE generator
+    async def _stream():
+        # Emit metadata first so the UI can show ES|QL toggle + highlights immediately
+        meta = {
+            "esql_query": esql_query,
+            "highlighted_entities": highlighted_entities,
+            "map_annotations": map_annotations,
+        }
+        yield f"event: metadata\ndata: {json.dumps(meta, default=str)}\n\n"
+
+        # Stream tokens from Claude
+        try:
+            async for token in stream_explanation(
+                question=query.question,
+                esql_query=esql_query,
+                table=table,
+                context_threat_id=query.context_threat_id,
+            ):
+                yield f"event: token\ndata: {json.dumps({'text': token})}\n\n"
+        except Exception as exc:
+            logger.error("Chat stream error: %s", exc)
+            yield f"event: error\ndata: {json.dumps({'error': str(exc)})}\n\n"
+
+        yield "event: done\ndata: {}\n\n"
+
+    return StreamingResponse(
+        _stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control":     "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 

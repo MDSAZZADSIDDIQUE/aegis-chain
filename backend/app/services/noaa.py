@@ -146,6 +146,8 @@ async def fetch_noaa_alerts() -> list[dict[str, Any]]:
 
             # Compute centroid and future simulated zones
             future_zones = []
+            centroid_dict = None
+            severity_val = _SEVERITY_MAP.get(props.get("severity", ""), "unknown")
             try:
                 shp = shape(affected_zone)
                 centroid = shp.centroid
@@ -153,7 +155,6 @@ async def fetch_noaa_alerts() -> list[dict[str, Any]]:
                 
                 # Dynamic Expansion Simulation (Time Machine)
                 # We project the polygon outwards based on severity
-                severity_val = _SEVERITY_MAP.get(props.get("severity", ""), "unknown")
                 expansion_rates = {"extreme": 0.15, "severe": 0.08, "moderate": 0.03, "minor": 0.01, "unknown": 0.02}
                 base_rate = expansion_rates.get(severity_val, 0.02)
                 
@@ -175,8 +176,8 @@ async def fetch_noaa_alerts() -> list[dict[str, Any]]:
                         })
 
             except Exception as exc:
-                logger.warning("Failed to compute spatial derivations for alert %s: %s", alert_id, exc)
-                continue
+                logger.warning("Failed to compute spatial derivations for alert %s: %s — including alert without centroid/future zones", alert_id, exc)
+                # BUG-025 fix: do NOT continue here — still include the alert
 
             threats.append({
                 "threat_id": alert_id,

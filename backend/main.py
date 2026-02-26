@@ -34,7 +34,9 @@ from app.core.events import (
 )
 from app.services.noaa import fetch_noaa_alerts
 from app.services.nasa_firms import fetch_firms_fires
+from app.services.usgs import fetch_usgs_earthquakes
 from app.services.indexer import index_threats, expire_old_threats
+from app.services.ml_jobs import ensure_ml_jobs
 
 logging.basicConfig(
     level=getattr(logging, settings.log_level.upper(), logging.INFO),
@@ -48,19 +50,21 @@ scheduler = AsyncIOScheduler()
 # ── Background task helpers ───────────────────────────────────────────────────
 
 async def scheduled_ingest() -> None:
-    """Background task: poll NOAA + FIRMS, index threats, broadcast to SSE."""
+    """Background task: poll NOAA + FIRMS + USGS, index threats, broadcast to SSE."""
     try:
         expire_old_threats()
         noaa  = await fetch_noaa_alerts()
         firms = await fetch_firms_fires()
-        total = index_threats(noaa + firms)
+        usgs  = await fetch_usgs_earthquakes()
+        total = await index_threats(noaa + firms + usgs)
         logger.info(
-            "Scheduled ingest: %d NOAA, %d FIRMS, %d indexed",
-            len(noaa), len(firms), total,
+            "Scheduled ingest: %d NOAA, %d FIRMS, %d USGS, %d indexed",
+            len(noaa), len(firms), len(usgs), total,
         )
         await broadcast("ingest_complete", {
             "noaa_alerts":    len(noaa),
             "firms_clusters": len(firms),
+            "usgs_quakes":    len(usgs),
             "indexed":        total,
             "timestamp":      datetime.now(timezone.utc).isoformat(),
         })
@@ -96,6 +100,7 @@ async def lifespan(app: FastAPI):
     logger.info("AegisChain starting up...")
 
     await ensure_indices()
+    await ensure_ml_jobs()
 
     scheduler.add_job(
         scheduled_ingest,

@@ -108,10 +108,19 @@ def verify_slack_signature(
     signature: str,
 ) -> bool:
     """Verify that an incoming request actually came from Slack."""
-    if abs(time.time() - int(timestamp)) > 300:
+    if not settings.slack_signing_secret:
+        logger.warning("Slack signing secret not configured — rejecting request")
+        return False
+
+    try:
+        ts = int(timestamp)
+    except (ValueError, TypeError):
+        return False
+
+    if abs(time.time() - ts) > 300:
         return False  # request too old — replay attack prevention
 
-    sig_basestring = f"v0:{timestamp}:{body.decode('utf-8')}"
+    sig_basestring = f"v0:{timestamp}:{body.decode('utf-8', errors='replace')}"
     computed = (
         "v0="
         + hmac.new(

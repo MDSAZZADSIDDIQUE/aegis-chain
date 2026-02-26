@@ -64,7 +64,15 @@ async def run_full_pipeline(emit: EmitFn = None) -> dict[str, Any]:
     logger.info("=== Pipeline: Running Agent 1 (Watcher) ===")
     await _emit({"agent": "watcher", "status": "running"})
 
-    watcher_result = await run_watcher_cycle()
+    try:
+        watcher_result = await run_watcher_cycle()
+    except Exception as exc:
+        logger.exception("Watcher agent failed")
+        await _emit({"agent": "watcher", "status": "error", "error": str(exc)})
+        await _emit({"agent": "pipeline", "status": "error",
+                     "failed_agent": "watcher", "error": str(exc)})
+        raise
+
     pipeline_result["watcher"] = {
         "bottleneck_count":    len(watcher_result.get("bottleneck_predictions", [])),
         "at_risk_locations":   len(watcher_result.get("at_risk_locations", [])),

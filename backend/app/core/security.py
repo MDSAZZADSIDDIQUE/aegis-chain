@@ -26,9 +26,14 @@ Exempt endpoints
 
 from __future__ import annotations
 
+import logging
+import os
+
 from fastapi import Header, HTTPException, status
 
 from app.core.config import settings
+
+logger = logging.getLogger("aegis.security")
 
 
 async def verify_api_key(
@@ -41,7 +46,14 @@ async def verify_api_key(
     configured (dev / test environments).
     """
     if not settings.aegis_api_key:
-        # Auth disabled — environment has no key configured.
+        if os.getenv("AEGIS_ENV", "development") == "production":
+            raise HTTPException(
+                status_code=500,
+                detail="AEGIS_API_KEY must be configured in production",
+            )
+        logger.warning(
+            "API key auth DISABLED — set AEGIS_API_KEY env var for production"
+        )
         return
 
     if x_aegischain_key != settings.aegis_api_key:

@@ -45,6 +45,12 @@ export interface Proposal {
   rationale: string;
   hitl_status?: string;
   approved?: boolean;
+  /** Auditor composite confidence score (0–1). */
+  confidence?: number;
+  /** RL adjustment applied to the original supplier's reliability index. */
+  rl_adjustment?: number;
+  /** Auditor's human-readable explanation of the verdict. */
+  audit_explanation?: string;
   /** GeoJSON LineString from Mapbox Directions — null when routing failed. */
   route_geometry?: GeoJSON.Geometry | null;
 }
@@ -55,6 +61,11 @@ export interface DashboardState {
   active_routes: Proposal[];
   pending_proposals: Proposal[];
   total_value_at_risk: number;
+}
+
+export interface XRayTarget {
+  location_id: string;
+  reason: "traffic" | "highlight" | "warning";
 }
 
 export interface ChatResponse {
@@ -86,6 +97,89 @@ export async function sendChatMessage(
   });
   if (!res.ok) throw new Error(`Chat request failed: ${res.status}`);
   return res.json();
+}
+
+/** Metadata emitted by the /chat/stream SSE endpoint before tokens. */
+export interface ChatStreamMetadata {
+  esql_query: string | null;
+  highlighted_entities: string[];
+  map_annotations: Array<{ type: string; [key: string]: unknown }>;
+}
+
+/**
+ * Stream chat response tokens from `/chat/stream` via SSE.
+ *
+ * The backend emits three event types:
+ *   - `metadata` — ES|QL query, highlighted entities, map annotations (once)
+ *   - `token`    — text delta from Claude (many)
+ *   - `done`     — stream complete (once)
+ */
+export async function streamChatMessage(
+  question: string,
+  contextThreatId: string | undefined,
+  callbacks: {
+    onMeta: (meta: ChatStreamMetadata) => void;
+    onToken: (text: string) => void;
+    onDone: () => void;
+    onError?: (error: string) => void;
+  },
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch(`${API_URL}/chat/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      question,
+      context_threat_id: contextThreatId ?? null,
+    }),
+    signal,
+  });
+
+  if (!res.ok) throw new Error(`Chat stream failed: ${res.status}`);
+  if (!res.body) throw new Error("No response body for streaming");
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let currentEvent = "";
+
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+
+    // Process complete SSE lines
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? ""; // keep incomplete last line
+
+    for (const line of lines) {
+      if (line.startsWith("event: ")) {
+        currentEvent = line.slice(7).trim();
+      } else if (line.startsWith("data: ")) {
+        const raw = line.slice(6);
+        try {
+          const data = JSON.parse(raw);
+          if (currentEvent === "metadata") {
+            callbacks.onMeta(data as ChatStreamMetadata);
+          } else if (currentEvent === "token") {
+            callbacks.onToken(data.text ?? "");
+          } else if (currentEvent === "done") {
+            callbacks.onDone();
+          } else if (currentEvent === "error") {
+            callbacks.onError?.(data.error ?? "Unknown error");
+          }
+        } catch {
+          // malformed JSON — skip
+        }
+        currentEvent = "";
+      }
+    }
+  }
+
+  // Ensure done fires even if stream ends without explicit done event
+  callbacks.onDone();
 }
 
 export interface ERPLocationUpsert {

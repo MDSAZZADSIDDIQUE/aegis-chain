@@ -71,10 +71,10 @@ class AuditVerdict(BaseModel):
 # ── Mapbox request/response ──────────────────────────────────────────
 
 class MapboxRouteRequest(BaseModel):
-    origin_lon: float
-    origin_lat: float
-    destination_lon: float
-    destination_lat: float
+    origin_lon: float = Field(..., ge=-180, le=180)
+    origin_lat: float = Field(..., ge=-90, le=90)
+    destination_lon: float = Field(..., ge=-180, le=180)
+    destination_lat: float = Field(..., ge=-90, le=90)
     avoid_polygon: dict[str, Any] | None = None  # GeoJSON polygon to avoid
 
 

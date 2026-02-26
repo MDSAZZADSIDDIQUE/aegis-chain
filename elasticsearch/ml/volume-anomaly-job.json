@@ -1,0 +1,66 @@
+{
+  "job_id": "supply_volume_anomaly_24h",
+  "description": "Detects abnormal drops in shipment volume or sudden spikes in value — early warning for demand shocks or supply disruptions. Feeds Agent 1 (Watcher) demand-side signals.",
+  "analysis_config": {
+    "bucket_span": "4h",
+    "detectors": [
+      {
+        "function": "low_count",
+        "partition_field_name": "supplier_id",
+        "detector_description": "Abnormally low shipment count per supplier (supply disruption)"
+      },
+      {
+        "function": "high_sum",
+        "field_name": "delay_hours",
+        "by_field_name": "supplier_id",
+        "detector_description": "Unusual total delay hours per supplier"
+      },
+      {
+        "function": "high_varp",
+        "field_name": "shipment_value_usd",
+        "partition_field_name": "location_id",
+        "detector_description": "High variance in shipment values per location (pricing anomaly)"
+      }
+    ],
+    "influencers": [
+      "supplier_id",
+      "location_id",
+      "transport_mode"
+    ],
+    "model_prune_window": "14d"
+  },
+  "data_description": {
+    "time_field": "@timestamp",
+    "time_format": "epoch_ms"
+  },
+  "analysis_limits": {
+    "model_memory_limit": "128mb"
+  },
+  "results_index_name": "aegis-ml-results",
+  "datafeed_config": {
+    "datafeed_id": "datafeed-supply_volume_anomaly_24h",
+    "indices": ["supply-latency-logs"],
+    "query": {
+      "bool": {
+        "filter": [
+          {
+            "range": {
+              "@timestamp": {
+                "gte": "now-14d"
+              }
+            }
+          }
+        ]
+      }
+    },
+    "frequency": "5m",
+    "query_delay": "60s",
+    "scroll_size": 1000
+  },
+  "custom_settings": {
+    "created_by": "aegis-chain-watcher-agent",
+    "project": "aegis-chain",
+    "lookahead_window": "24h",
+    "notes": "Detects demand-side anomalies: supply drops, delay spikes, and pricing variance. Anomaly scores above 75 are consumed by Agent 1 Watcher."
+  }
+}

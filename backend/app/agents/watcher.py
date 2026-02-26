@@ -221,10 +221,11 @@ async def run_watcher_cycle() -> dict[str, Any]:
         ml_record = ml_by_entity.get(supplier_id) or ml_by_entity.get(location_id)
         ml_score  = None
         if ml_record:
-            ml_score = max(
+            raw_ml = max(
                 ml_record.get("anomaly_score") or 0,
                 ml_record.get("record_score") or 0,
-            ) or None
+            )
+            ml_score = raw_ml if raw_ml > 0 else None
 
         pred["composite_risk_score"] = _composite_risk(avg_delay, ml_score)
         pred["ml_anomaly_score"] = ml_score

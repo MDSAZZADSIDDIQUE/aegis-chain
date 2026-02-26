@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -12,7 +13,7 @@ from app.core.elastic import get_es_client
 logger = logging.getLogger("aegis.indexer")
 
 
-def index_threats(threats: list[dict[str, Any]]) -> int:
+async def index_threats(threats: list[dict[str, Any]]) -> int:
     """Bulk-index weather-threat documents. Returns count of indexed docs."""
     if not threats:
         return 0
@@ -27,7 +28,9 @@ def index_threats(threats: list[dict[str, Any]]) -> int:
             "_source": doc,
         })
 
-    success, errors = bulk(es, actions, raise_on_error=False, refresh="wait_for")
+    success, errors = await asyncio.to_thread(
+        bulk, es, actions, raise_on_error=False, refresh="wait_for"
+    )
     if errors:
         logger.error("Bulk indexing errors: %s", errors)
 
@@ -35,10 +38,11 @@ def index_threats(threats: list[dict[str, Any]]) -> int:
     return success
 
 
-def expire_old_threats() -> int:
+async def expire_old_threats() -> int:
     """Mark expired NOAA alerts as status=expired using update_by_query."""
     es = get_es_client()
-    resp = es.update_by_query(
+    resp = await asyncio.to_thread(
+        es.update_by_query,
         index="weather-threats",
         body={
             "query": {
@@ -62,13 +66,14 @@ def expire_old_threats() -> int:
     return updated
 
 
-def update_reliability_index(
+async def update_reliability_index(
     supplier_id: str,
     new_reliability: float,
 ) -> None:
     """Update a supplier's reliability_index in erp-locations."""
     es = get_es_client()
-    es.update_by_query(
+    await asyncio.to_thread(
+        es.update_by_query,
         index="erp-locations",
         body={
             "query": {"term": {"location_id": supplier_id}},

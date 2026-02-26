@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { subscribePipelineProgress, type PipelineProgressEvent } from "@/lib/api";
+import { usePipelineProgress } from "@/components/providers/PipelineProgressProvider";
+import type { PipelineProgressEvent } from "@/lib/api";
 
 type AgentState = "idle" | "running" | "complete";
 
@@ -26,57 +27,59 @@ export default function PipelineTelemetry() {
     hitl: 0,
   });
 
+  // BUG-008 fix: consume events from shared context instead of own WebSocket
+  const { lastEvent } = usePipelineProgress();
+
   useEffect(() => {
-    const closeWS = subscribePipelineProgress((ev: PipelineProgressEvent) => {
-      // Show HUD when pipeline starts
-      if (ev.agent === "pipeline" && ev.status === "running") {
-        setIsVisible(true);
-        setWatcherState("idle");
-        setProcurementState("idle");
-        setAuditorState("idle");
-        setMetrics({ threats: 0, var_usd: 0, proposals: 0, approved: 0, hitl: 0 });
-      }
+    if (!lastEvent) return;
+    const ev = lastEvent;
 
-      // Hide HUD shortly after pipeline completes
-      if (ev.agent === "pipeline" && ev.status === "complete") {
-        setTimeout(() => setIsVisible(false), 8000);
-      }
+    // Show HUD when pipeline starts
+    if (ev.agent === "pipeline" && ev.status === "running") {
+      setIsVisible(true);
+      setWatcherState("idle");
+      setProcurementState("idle");
+      setAuditorState("idle");
+      setMetrics({ threats: 0, var_usd: 0, proposals: 0, approved: 0, hitl: 0 });
+    }
 
-      if (ev.agent === "watcher") {
-        setWatcherState(ev.status as AgentState);
-        if (ev.status === "complete") {
-          setMetrics(m => ({
-            ...m,
-            threats: ev.threats ?? m.threats,
-            var_usd: ev.var_usd ?? m.var_usd,
-          }));
-        }
-      }
-      
-      if (ev.agent === "procurement") {
-        setProcurementState(ev.status as AgentState);
-        if (ev.status === "complete") {
-          setMetrics(m => ({
-            ...m,
-            proposals: ev.proposals ?? m.proposals,
-          }));
-        }
-      }
-      
-      if (ev.agent === "auditor") {
-        setAuditorState(ev.status as AgentState);
-        if (ev.status === "complete") {
-          setMetrics(m => ({
-            ...m,
-            approved: ev.approved ?? m.approved,
-            hitl: ev.hitl ?? m.hitl,
-          }));
-        }
-      }
-    });
+    // Hide HUD shortly after pipeline completes
+    if (ev.agent === "pipeline" && ev.status === "complete") {
+      setTimeout(() => setIsVisible(false), 8000);
+    }
 
-    return () => closeWS();
-  }, []);
+    if (ev.agent === "watcher") {
+      setWatcherState(ev.status as AgentState);
+      if (ev.status === "complete") {
+        setMetrics(m => ({
+          ...m,
+          threats: ev.threats ?? m.threats,
+          var_usd: ev.var_usd ?? m.var_usd,
+        }));
+      }
+    }
+    
+    if (ev.agent === "procurement") {
+      setProcurementState(ev.status as AgentState);
+      if (ev.status === "complete") {
+        setMetrics(m => ({
+          ...m,
+          proposals: ev.proposals ?? m.proposals,
+        }));
+      }
+    }
+    
+    if (ev.agent === "auditor") {
+      setAuditorState(ev.status as AgentState);
+      if (ev.status === "complete") {
+        setMetrics(m => ({
+          ...m,
+          approved: ev.approved ?? m.approved,
+          hitl: ev.hitl ?? m.hitl,
+        }));
+      }
+    }
+  }, [lastEvent]);
 
   if (!isVisible) return null;
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { PlayIcon, PauseIcon } from "@heroicons/react/24/solid";
 
 interface TimeSliderProps {
@@ -14,7 +14,14 @@ export default function TimeSlider({ onTimeChange, maxHours = 72 }: TimeSliderPr
 
   // Hardcode the distinct hour intervals our backend calculates for simplicity
   // We include 0 for current "real-time" state
-  const timeStops = [0, 12, 24, 48, 72].filter(h => h <= maxHours);
+  const timeStops = useMemo(
+    () => [0, 12, 24, 48, 72].filter(h => h <= maxHours),
+    [maxHours]
+  );
+
+  // BUG-007: Use a ref for the callback to prevent deps instability
+  const onTimeChangeRef = useRef(onTimeChange);
+  onTimeChangeRef.current = onTimeChange;
 
   useEffect(() => {
     let interval: NodeJS.Timeout;
@@ -31,8 +38,8 @@ export default function TimeSlider({ onTimeChange, maxHours = 72 }: TimeSliderPr
   }, [isPlaying, timeStops]);
 
   useEffect(() => {
-    onTimeChange(offset);
-  }, [offset, onTimeChange]);
+    onTimeChangeRef.current(offset);
+  }, [offset]);
 
   const togglePlayback = () => setIsPlaying(!isPlaying);
 
@@ -77,7 +84,7 @@ export default function TimeSlider({ onTimeChange, maxHours = 72 }: TimeSliderPr
           <div className="absolute top-1/2 left-0 right-0 h-1.5 -translate-y-1/2 bg-slate-800 rounded-full overflow-hidden">
              <div 
                 className="h-full bg-gradient-to-r from-teal-500 to-emerald-400 transition-all duration-300 ease-out"
-                style={{ width: `${(offset / timeStops[timeStops.length-1]) * 100}%` }}
+                style={{ width: `${(timeStops.indexOf(offset) / Math.max(timeStops.length - 1, 1)) * 100}%` }}
              ></div>
           </div>
           
@@ -123,13 +130,14 @@ export default function TimeSlider({ onTimeChange, maxHours = 72 }: TimeSliderPr
 
           {/* Time markers */}
           <div className="absolute top-full left-0 right-0 mt-3 flex justify-between pointer-events-none px-[10px]">
-            {timeStops.map((stop) => (
+            {timeStops.map((stop, idx) => (
               <div 
                 key={stop} 
                 className={`flex flex-col items-center transition-colors duration-300 ${offset >= stop ? "text-teal-400" : "text-slate-600"}`}
                 style={{
                   position: "absolute",
-                  left: `calc(${(stop / timeStops[timeStops.length-1]) * 100}% - 10px)`
+                  left: `${(idx / Math.max(timeStops.length - 1, 1)) * 100}%`,
+                  transform: "translateX(-50%)",
                 }}
               >
                 <div className={`w-1 h-2 mb-1 rounded-sm ${offset >= stop ? "bg-teal-400" : "bg-slate-700"}`}></div>

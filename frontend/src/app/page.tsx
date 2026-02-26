@@ -13,13 +13,17 @@ import GlobeErrorBoundary from "@/components/map/GlobeErrorBoundary";
 import PipelineTelemetry from "@/components/dashboard/PipelineTelemetry";
 import ThreatPanel from "@/components/dashboard/ThreatPanel";
 import RLOverlay from "@/components/dashboard/RLOverlay";
+import FinancialHUD from "@/components/dashboard/FinancialHUD";
 import TimeSlider from "@/components/map/TimeSlider";
+import {
+  PipelineProgressProvider,
+  usePipelineProgress,
+} from "@/components/providers/PipelineProgressProvider";
 import {
   fetchDashboardState,
   triggerPipeline,
   triggerIngest,
   subscribeToEvents,
-  subscribePipelineProgress,
   createERPLocation,
   type DashboardState,
   type WeatherThreat,
@@ -27,6 +31,7 @@ import {
   type ERPLocationUpsert,
   type PipelineProgressEvent,
   type Proposal,
+  type XRayTarget,
 } from "@/lib/api";
 
 const AegisGlobe = dynamic(() => import("@/components/map/AegisGlobe"), {
@@ -61,6 +66,8 @@ const EVENT_CODE: Record<string, string> = {
   severe_thunderstorm: "TST",
   heat_wave: "HEW",
   wildfire: "WFR",
+  earthquake: "EQK",
+  tsunami: "TSU",
   unknown: "UNK",
 };
 
@@ -72,6 +79,14 @@ const fetcher = (url: string) =>
   });
 
 export default function DashboardPage() {
+  return (
+    <PipelineProgressProvider>
+      <DashboardInner />
+    </PipelineProgressProvider>
+  );
+}
+
+function DashboardInner() {
   const {
     data: state,
     error: swrError,
@@ -88,6 +103,7 @@ export default function DashboardPage() {
   );
 
   const [highlighted, setHighlighted] = useState<string[]>([]);
+  const [xrayTargets, setXrayTargets] = useState<XRayTarget[]>([]);
   const [selectedThreat, setSelectedThreat] = useState<WeatherThreat | null>(
     null,
   );
@@ -116,12 +132,18 @@ export default function DashboardPage() {
     }
   }, [mutate]);
 
+  // Track whether initial sync timestamp has been set
+  const lastSyncSetRef = useRef(false);
+
   useEffect(() => {
     // Initial sync time record
-    if (state && !lastSync) {
+    if (state && !lastSyncSetRef.current) {
+      lastSyncSetRef.current = true;
       setLastSync(new Date());
     }
+  }, [state]);
 
+  useEffect(() => {
     // SSE real-time push — reload dashboard on any backend event
     const closeSSE = subscribeToEvents(
       () => loadState(),
@@ -130,23 +152,23 @@ export default function DashboardPage() {
       },
     );
 
-    // Pipeline progress WebSocket for granular HUD updates
-    const closeWS = subscribePipelineProgress((ev: PipelineProgressEvent) => {
-      if (ev.agent === "auditor" && ev.status === "complete") {
-        setPipelineMetrics({
-          approved: ev.approved ?? 0,
-          hitl: ev.hitl ?? 0,
-        });
-        // Immediately refresh state to pull the new arcs
-        loadState();
-      }
-    });
-
     return () => {
       closeSSE();
-      closeWS();
     };
-  }, [loadState, state, lastSync]);
+  }, [loadState]);
+
+  // Pipeline progress from shared WebSocket context (BUG-008 fix)
+  const { lastEvent: pipelineEvent } = usePipelineProgress();
+  useEffect(() => {
+    if (!pipelineEvent) return;
+    if (pipelineEvent.agent === "auditor" && pipelineEvent.status === "complete") {
+      setPipelineMetrics({
+        approved: pipelineEvent.approved ?? 0,
+        hitl: pipelineEvent.hitl ?? 0,
+      });
+      loadState();
+    }
+  }, [pipelineEvent, loadState]);
 
   const handleIngest = async () => {
     setRunning("ingest");
@@ -210,12 +232,21 @@ export default function DashboardPage() {
           CENTER — Satellite Map
       ══════════════════════════════════════════════════════ */}
       <main className="relative flex-1 bg-stone-950">
+        {/* ── Financial Impact HUD ─────────────────────────── */}
+        <FinancialHUD
+          valueAtRisk={state?.total_value_at_risk ?? 0}
+          reroutesActive={state?.active_routes.length ?? 0}
+          activeThreats={state?.active_threats.length ?? 0}
+          disruptionsPrevented={reroutes_count}
+        />
+
         <GlobeErrorBoundary>
           <AegisGlobe
             threats={state?.active_threats ?? []}
             locations={state?.erp_locations ?? []}
             routes={state?.active_routes ?? []}
             highlightedEntities={highlighted}
+            xrayTargets={xrayTargets}
             selectedThreatId={selectedThreat?.threat_id}
             simulatedOffsetHours={simulatedOffsetHours}
             onLocationClick={handleLocationClick}
@@ -317,6 +348,7 @@ export default function DashboardPage() {
         <ChatToMap
           contextThreatId={selectedThreat?.threat_id}
           onHighlight={setHighlighted}
+          onXray={setXrayTargets}
         />
       </aside>
     </div>
