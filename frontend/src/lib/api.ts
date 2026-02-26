@@ -10,6 +10,7 @@ export interface WeatherThreat {
   headline: string;
   description: string;
   affected_zone: GeoJSON.Geometry;
+  future_zones?: { offset_hours: number; geometry: any }[];
   centroid: { lat: number; lon: number } | null;
   effective: string | null;
   expires: string | null;

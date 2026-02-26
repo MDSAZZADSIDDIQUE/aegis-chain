@@ -144,25 +144,51 @@ async def fetch_noaa_alerts() -> list[dict[str, Any]]:
                 # Shapely and GeoJSON mapping already follow this.
                 affected_zone = mapping(merged)
 
-            # Compute centroid
+            # Compute centroid and future simulated zones
+            future_zones = []
             try:
                 shp = shape(affected_zone)
                 centroid = shp.centroid
                 centroid_dict = {"lat": centroid.y, "lon": centroid.x}
+                
+                # Dynamic Expansion Simulation (Time Machine)
+                # We project the polygon outwards based on severity
+                severity_val = _SEVERITY_MAP.get(props.get("severity", ""), "unknown")
+                expansion_rates = {"extreme": 0.15, "severe": 0.08, "moderate": 0.03, "minor": 0.01, "unknown": 0.02}
+                base_rate = expansion_rates.get(severity_val, 0.02)
+                
+                for offset_hr in [12, 24, 48, 72]:
+                    # Degrees are imperfect but functionally demonstrative for the Mapbox geo_shape
+                    buffered = shp.buffer(base_rate * (offset_hr / 12.0))
+                    if not buffered.is_valid:
+                        buffered = make_valid(buffered)
+                    
+                    if getattr(buffered, "geom_type", None) == "GeometryCollection":
+                        from shapely.geometry import MultiPolygon
+                        polys = [g for g in buffered.geoms if g.geom_type in ("Polygon", "MultiPolygon")]
+                        buffered = MultiPolygon(polys) if polys else None
+                        
+                    if buffered and not buffered.is_empty:
+                        future_zones.append({
+                            "offset_hours": offset_hr,
+                            "geometry": mapping(buffered)
+                        })
+
             except Exception as exc:
-                logger.warning("Failed to compute centroid for alert %s: %s", alert_id, exc)
+                logger.warning("Failed to compute spatial derivations for alert %s: %s", alert_id, exc)
                 continue
 
             threats.append({
                 "threat_id": alert_id,
                 "source": "noaa",
                 "event_type": _parse_event_type(event),
-                "severity": _SEVERITY_MAP.get(props.get("severity", ""), "unknown"),
+                "severity": severity_val,
                 "certainty": (props.get("certainty") or "unknown").lower(),
                 "urgency": (props.get("urgency") or "unknown").lower(),
                 "headline": props.get("headline", ""),
                 "description": props.get("description", ""),
                 "affected_zone": affected_zone,
+                "future_zones": future_zones,
                 "centroid": centroid_dict,
                 "effective": props.get("effective"),
                 "expires": props.get("expires"),

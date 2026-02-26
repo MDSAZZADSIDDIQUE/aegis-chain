@@ -25,6 +25,7 @@ class WeatherThreat(BaseModel):
     headline: str = ""
     description: str = ""
     affected_zone: dict[str, Any]  # GeoJSON
+    future_zones: list[dict[str, Any]] = Field(default_factory=list)  # Time-projected GeoJSON arrays for the simulation slider
     centroid: dict[str, float] | None = None  # {"lat": ..., "lon": ...}
     effective: datetime | None = None
     expires: datetime | None = None

@@ -159,6 +159,29 @@ async def fetch_firms_fires() -> list[dict[str, Any]]:
             # Shapely and mapping() already output this correctly.
             affected_zone = mapping(poly)
 
+            # Fire Spread Simulation (Time Machine)
+            future_zones = []
+            try:
+                # Wildfires expand aggressively; base rate is related to cluster size/intensity
+                expansion_base = 0.05 + (len(cluster_pts) * 0.002) 
+                for offset_hr in [12, 24, 48, 72]:
+                    buffered_fire = poly.buffer(expansion_base * (offset_hr / 12.0))
+                    if not buffered_fire.is_valid:
+                        buffered_fire = make_valid(buffered_fire)
+                        
+                    if getattr(buffered_fire, "geom_type", None) == "GeometryCollection":
+                        from shapely.geometry import MultiPolygon
+                        polys = [g for g in buffered_fire.geoms if g.geom_type in ("Polygon", "MultiPolygon")]
+                        buffered_fire = MultiPolygon(polys) if polys else None
+                        
+                    if buffered_fire and not buffered_fire.is_empty:
+                        future_zones.append({
+                            "offset_hours": offset_hr,
+                            "geometry": mapping(buffered_fire)
+                        })
+            except Exception as exc:
+                logger.warning("Failed to spatial-project FIRMS cluster: %s", exc)
+
             # Aggregate cluster metadata
             cluster_rows = [
                 row for lon, lat, row in fire_points
@@ -190,6 +213,7 @@ async def fetch_firms_fires() -> list[dict[str, Any]]:
                     f"Avg brightness: {avg_brightness:.0f}K, Avg FRP: {avg_frp:.1f}MW."
                 ),
                 "affected_zone": affected_zone,
+                "future_zones": future_zones,
                 "centroid": {"lat": centroid.y, "lon": centroid.x},
                 "effective": datetime.now(timezone.utc).isoformat(),
                 "expires": None,

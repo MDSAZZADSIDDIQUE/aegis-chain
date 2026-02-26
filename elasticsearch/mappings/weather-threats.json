@@ -44,6 +44,19 @@
           "description": "GeoJSON polygon of threat area (ST_INTERSECTS)."
         }
       },
+      "future_zones": {
+        "type": "object",
+        "properties": {
+          "offset_hours": {
+            "type": "integer"
+          },
+          "geometry": {
+            "type": "geo_shape",
+            "orientation": "RIGHT",
+            "ignore_malformed": true
+          }
+        }
+      },
       "centroid": {
         "type": "geo_point",
         "meta": {

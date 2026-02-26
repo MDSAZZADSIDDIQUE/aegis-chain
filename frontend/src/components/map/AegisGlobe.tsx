@@ -28,6 +28,7 @@ interface AegisGlobeProps {
   routes: Proposal[];
   highlightedEntities: string[];
   selectedThreatId?: string;
+  simulatedOffsetHours?: number; // Time Machine API integration
   onLocationClick?: (location: ERPLocation) => void;
   onThreatClick?: (threat: WeatherThreat) => void;
 }
@@ -38,6 +39,7 @@ export default function AegisGlobe({
   routes,
   highlightedEntities,
   selectedThreatId,
+  simulatedOffsetHours = 0,
   onLocationClick,
   onThreatClick,
 }: AegisGlobeProps) {
@@ -61,6 +63,8 @@ export default function AegisGlobe({
 
   // Dirty flags matrix to eliminate `setData` payload thrashing
   const dataDirtyRef = useRef({ threats: true, locations: true, routes: true });
+  // Ref for the current simulated time offset so the interval thread can access it
+  const simulatedOffsetRef = useRef(simulatedOffsetHours);
 
   useEffect(() => {
     onLocationClickRef.current = onLocationClick;
@@ -82,7 +86,12 @@ export default function AegisGlobe({
       highlightedEntitiesRef.current = highlightedEntities;
       dataDirtyRef.current.locations = true; 
     }
-  }, [onLocationClick, onThreatClick, threats, locations, routes, highlightedEntities]);
+    if (simulatedOffsetHours !== simulatedOffsetRef.current) {
+      simulatedOffsetRef.current = simulatedOffsetHours;
+      // Re-render threats payload explicitly with newly interpolated geometries
+      dataDirtyRef.current.threats = true;
+    }
+  }, [onLocationClick, onThreatClick, threats, locations, routes, highlightedEntities, simulatedOffsetHours]);
 
   // ── Initialize map ──────────────────────────────────────────────
   useEffect(() => {
@@ -451,17 +460,43 @@ export default function AegisGlobe({
     const centroidSource = map.getSource("threat-centroids") as mapboxgl.GeoJSONSource;
     if (!threatSource || !centroidSource) return;
 
-    const features: GeoJSON.Feature[] = threatsRef.current.map((t) => ({
-      type: "Feature",
-      properties: {
-        threat_id: t.threat_id,
-        event_type: t.event_type,
-        severity: t.severity,
-        headline: t.headline,
-        color: SEVERITY_COLORS[t.severity] || SEVERITY_COLORS.unknown,
-      },
-      geometry: t.affected_zone,
-    }));
+    const features: GeoJSON.Feature[] = [];
+    
+    for (const t of threatsRef.current) {
+      // Time Machine: Find the geometry that matches the current slider offset
+      let activeGeometry = t.affected_zone;
+      const targetOffset = simulatedOffsetRef.current;
+      
+      if (targetOffset > 0 && t.future_zones && t.future_zones.length > 0) {
+          // Fallback to the closest offset if the exact one is missing, 
+          // though our backend guarantees [12, 24, 48, 72]
+          const future = t.future_zones.find(fz => fz.offset_hours === targetOffset);
+          if (future && future.geometry) {
+              activeGeometry = future.geometry;
+          }
+      }
+
+      // Strict Mapbox WebGL fail-safe
+      const isValidGeometry = (geom: any) => {
+        if (!geom || !geom.type || !geom.coordinates) return false;
+        if (!Array.isArray(geom.coordinates) || geom.coordinates.length === 0) return false;
+        return true;
+      };
+
+      if (isValidGeometry(activeGeometry)) {
+        features.push({
+          type: "Feature",
+          properties: {
+            threat_id: t.threat_id,
+            event_type: t.event_type || "unknown",
+            severity: t.severity,
+            headline: t.headline,
+            color: SEVERITY_COLORS[t.severity] || SEVERITY_COLORS.unknown,
+          },
+          geometry: activeGeometry,
+        });
+      }
+    }
 
     console.log(`[AegisGlobe] Setting threat source data with ${features.length} features`, features[0]);
     threatSource.setData({ type: "FeatureCollection", features });
@@ -599,16 +634,31 @@ export default function AegisGlobe({
 
       if (allSourcesReady) {
         if (dataDirtyRef.current.threats) {
-          updateThreats();
-          dataDirtyRef.current.threats = false;
+          try {
+            updateThreats();
+          } catch (err) {
+            console.error("[AegisGlobe] Error updating threats:", err);
+          } finally {
+            dataDirtyRef.current.threats = false;
+          }
         }
         if (dataDirtyRef.current.locations) {
-          updateLocations();
-          dataDirtyRef.current.locations = false;
+          try {
+            updateLocations();
+          } catch (err) {
+            console.error("[AegisGlobe] Error updating locations:", err);
+          } finally {
+            dataDirtyRef.current.locations = false;
+          }
         }
         if (dataDirtyRef.current.routes) {
-          updateRoutes();
-          dataDirtyRef.current.routes = false;
+          try {
+            updateRoutes();
+          } catch (err) {
+            console.error("[AegisGlobe] Error updating routes:", err);
+          } finally {
+            dataDirtyRef.current.routes = false;
+          }
         }
       }
     }, 100);
