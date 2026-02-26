@@ -10,12 +10,34 @@ import logging
 from typing import Any
 
 import httpx
+from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception
 
 from app.core.config import settings
 
 logger = logging.getLogger("aegis.mapbox")
 
 DIRECTIONS_URL = "https://api.mapbox.com/directions/v5/mapbox/driving"
+
+def _is_retryable_httpx_error(exc: Exception) -> bool:
+    if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in (429, 500, 502, 503, 504):
+        logger.warning("Mapbox API error %s: %s", exc.response.status_code, exc)
+        return True
+    if isinstance(exc, (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.ConnectError)):
+        logger.warning("Mapbox connection error: %s", exc)
+        return True
+    return False
+
+@retry(
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    stop=stop_after_attempt(5),
+    retry=retry_if_exception(_is_retryable_httpx_error),
+    reraise=True
+)
+async def _fetch_mapbox_route(url: str, params: dict[str, str]) -> dict:
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(url, params=params, timeout=15)
+        resp.raise_for_status()
+        return resp.json()
 
 
 async def get_route(
@@ -68,12 +90,11 @@ async def get_route(
         except Exception as exc:
             logger.warning("Failed to compute avoidance waypoint: %s", exc)
 
-    url = f"{DIRECTIONS_URL}/{coords}"
-
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(url, params=params, timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
+    try:
+        data = await _fetch_mapbox_route(url, params)
+    except Exception as exc:
+        logger.error("Mapbox API failed after retries: %s", exc)
+        raise ValueError(f"Mapbox API failed: {exc}") from exc
 
     routes = data.get("routes", [])
     if not routes:

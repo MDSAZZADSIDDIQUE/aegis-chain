@@ -7,6 +7,7 @@ import logging
 from typing import Any
 
 import anthropic
+from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception
 
 from app.core.config import settings
 
@@ -85,6 +86,29 @@ FROM aegis-proposals
 
 # ── Public helpers ───────────────────────────────────────────────────────────
 
+def _is_retryable_anthropic_error(exc: Exception) -> bool:
+    if isinstance(exc, anthropic.RateLimitError):
+        logger.warning("Anthropic rate limit error: %s", exc)
+        return True
+    if isinstance(exc, anthropic.APIStatusError) and exc.status_code in (429, 500, 502, 503, 504):
+        logger.warning("Anthropic API error %s: %s", exc.status_code, exc)
+        return True
+    if isinstance(exc, anthropic.APIConnectionError):
+        logger.warning("Anthropic connection error: %s", exc)
+        return True
+    return False
+
+
+@retry(
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    stop=stop_after_attempt(5),
+    retry=retry_if_exception(_is_retryable_anthropic_error),
+    reraise=True
+)
+async def _call_claude_messages_create(client: anthropic.AsyncAnthropic, **kwargs) -> Any:
+    return await client.messages.create(**kwargs)
+
+
 async def classify_intent(question: str) -> str:
     """Return one of: supplier_ranking | risk_assessment | reroute_status | general.
 
@@ -97,7 +121,8 @@ async def classify_intent(question: str) -> str:
 
     client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
     try:
-        response = await client.messages.create(
+        response = await _call_claude_messages_create(
+            client,
             model="claude-haiku-4-5-20251001",
             max_tokens=40,
             system=_INTENT_SYSTEM,
@@ -140,7 +165,8 @@ async def explain_results(
     )
 
     try:
-        response = await client.messages.create(
+        response = await _call_claude_messages_create(
+            client,
             model="claude-sonnet-4-6",
             max_tokens=400,
             system=_EXPLAIN_SYSTEM,
