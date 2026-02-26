@@ -91,6 +91,7 @@ async def get_route(
             logger.warning("Failed to compute avoidance waypoint: %s", exc)
 
     try:
+        url = f"{DIRECTIONS_URL}/{coords}"
         data = await _fetch_mapbox_route(url, params)
     except Exception as exc:
         logger.error("Mapbox API failed after retries: %s", exc)

@@ -383,36 +383,45 @@ async def dashboard_state():
 
         # Value at risk — sum inventory in threat zones
         value_at_risk = 0.0
-        for threat in active_threats:
-            zone = threat.get("affected_zone")
-            if not zone:
-                continue
-            var_resp = await run_in_threadpool(
-                es.search,
-                index="erp-locations",
-                body={
-                    "size": 0,
-                    "query": {
-                        "bool": {
-                            "filter": [
-                                {"geo_shape": {
-                                    "coordinates": {
-                                        "shape": zone,
-                                        "relation": "intersects",
-                                    }
-                                }},
-                                {"term": {"active": True}},
-                            ]
-                        }
-                    },
-                    "aggs": {"total_value": {"sum": {"field": "inventory_value_usd"}}},
-                },
-            )
-            value_at_risk += (
-                var_resp.get("aggregations", {})
-                .get("total_value", {})
-                .get("value", 0)
-            )
+        
+        valid_zones = [
+            t["affected_zone"] for t in active_threats 
+            if t.get("affected_zone")
+        ]
+        
+        if valid_zones:
+            msearch_body = []
+            for zone in valid_zones:
+                msearch_body.extend([
+                    {"index": "erp-locations"},
+                    {
+                        "size": 0,
+                        "query": {
+                            "bool": {
+                                "filter": [
+                                    {"geo_shape": {
+                                        "coordinates": {
+                                            "shape": zone,
+                                            "relation": "intersects"
+                                        }
+                                    }},
+                                    {"term": {"active": True}}
+                                ]
+                            }
+                        },
+                        "aggs": {"total_value": {"sum": {"field": "inventory_value_usd"}}}
+                    }
+                ])
+                
+            msearch_resp = await run_in_threadpool(es.msearch, body=msearch_body)
+            
+            for resp in msearch_resp.get("responses", []):
+                if not resp.get("error"):
+                    value_at_risk += (
+                        resp.get("aggregations", {})
+                            .get("total_value", {})
+                            .get("value", 0)
+                    )
 
         # Active routes — proposals that are visible on the map
         active_routes, _ = await run_in_threadpool(

@@ -205,7 +205,7 @@ async def run_procurement_cycle(
         # Attention = (Vector_Similarity × Reliability_Index) / Live_Drive_Time_Minutes
         attention_score = (
             (vector_similarity * reliability)
-            / max(drive_time_min, 0.1)
+            / max(drive_time_min, 5.0)
         )
 
         scored.append({

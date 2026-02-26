@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     # Elastic
     elastic_cloud_id: str = ""
     elastic_api_key: str = ""
-    elastic_url: str = ""
+    elastic_url: str = "http://localhost:9200"
     allowed_origins: list[str] = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",

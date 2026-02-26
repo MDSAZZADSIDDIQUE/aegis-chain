@@ -130,6 +130,16 @@ async def fetch_noaa_alerts() -> list[dict[str, Any]]:
                 if not merged.is_valid:
                     merged = make_valid(merged)
                 
+                # make_valid can yield a GeometryCollection containing stray Points/Lines.
+                # Mapbox fill layers strictly require Polygons/MultiPolygons.
+                if getattr(merged, "geom_type", None) == "GeometryCollection":
+                    from shapely.geometry import GeometryCollection, MultiPolygon
+                    polys = [geom for geom in merged.geoms if geom.geom_type in ("Polygon", "MultiPolygon")]
+                    merged = MultiPolygon(polys) if polys else None
+
+                if not merged or merged.is_empty:
+                    continue
+
                 # Elasticsearch expects GeoJSON [Longitude, Latitude] order.
                 # Shapely and GeoJSON mapping already follow this.
                 affected_zone = mapping(merged)

@@ -52,13 +52,21 @@ export default function AegisGlobe({
   // without needing to re-initialize the entire map.
   const onLocationClickRef = useRef(onLocationClick);
   const onThreatClickRef = useRef(onThreatClick);
+  
+  // Keep rapidly-updating SWR state in refs to prevent interval tear-downs
   const threatsRef = useRef(threats);
+  const locationsRef = useRef(locations);
+  const routesRef = useRef(routes);
+  const highlightedEntitiesRef = useRef(highlightedEntities);
 
   useEffect(() => {
     onLocationClickRef.current = onLocationClick;
     onThreatClickRef.current = onThreatClick;
     threatsRef.current = threats;
-  }, [onLocationClick, onThreatClick, threats]);
+    locationsRef.current = locations;
+    routesRef.current = routes;
+    highlightedEntitiesRef.current = highlightedEntities;
+  }, [onLocationClick, onThreatClick, threats, locations, routes, highlightedEntities]);
 
   // ── Initialize map ──────────────────────────────────────────────
   useEffect(() => {
@@ -405,7 +413,7 @@ export default function AegisGlobe({
     const centroidSource = map.getSource("threat-centroids") as mapboxgl.GeoJSONSource;
     if (!threatSource || !centroidSource) return;
 
-    const features: GeoJSON.Feature[] = threats.map((t) => ({
+    const features: GeoJSON.Feature[] = threatsRef.current.map((t) => ({
       type: "Feature",
       properties: {
         threat_id: t.threat_id,
@@ -420,7 +428,7 @@ export default function AegisGlobe({
     console.log(`[AegisGlobe] Setting threat source data with ${features.length} features`, features[0]);
     threatSource.setData({ type: "FeatureCollection", features });
 
-    const centroidFeatures: GeoJSON.Feature[] = threats
+    const centroidFeatures: GeoJSON.Feature[] = threatsRef.current
       .filter((t) => t.centroid)
       .map((t) => ({
         type: "Feature",
@@ -447,7 +455,7 @@ export default function AegisGlobe({
     const source = map.getSource("erp-locations") as mapboxgl.GeoJSONSource;
     if (!source) return;
 
-    const features: GeoJSON.Feature[] = locations.map((loc) => ({
+    const features: GeoJSON.Feature[] = locationsRef.current.map((loc) => ({
       type: "Feature",
       properties: {
         location_id: loc.location_id,
@@ -457,7 +465,7 @@ export default function AegisGlobe({
         inventory_value_usd: loc.inventory_value_usd,
         avg_lead_time_hours: loc.avg_lead_time_hours,
         color: LOCATION_COLORS[loc.type] || "#6b7280",
-        highlighted: highlightedEntities.includes(loc.location_id) || highlightedEntities.includes(loc.name),
+        highlighted: highlightedEntitiesRef.current.includes(loc.location_id) || highlightedEntitiesRef.current.includes(loc.name),
       },
       geometry: {
         type: "Point",
@@ -479,9 +487,9 @@ export default function AegisGlobe({
 
     const features: GeoJSON.Feature[] = [];
 
-    for (const route of routes) {
-      const origin = locations.find((l) => l.location_id === route.original_supplier_id);
-      const dest   = locations.find((l) => l.location_id === route.proposed_supplier_id);
+    for (const route of routesRef.current) {
+      const origin = locationsRef.current.find((l) => l.location_id === route.original_supplier_id);
+      const dest   = locationsRef.current.find((l) => l.location_id === route.proposed_supplier_id);
       if (!origin || !dest) continue;
 
       // Prefer the real Mapbox road geometry stored on the proposal.
@@ -492,8 +500,11 @@ export default function AegisGlobe({
         lineGeometry = route.route_geometry;
       } else if (origin.coordinates.lon === dest.coordinates.lon && origin.coordinates.lat === dest.coordinates.lat) {
         lineGeometry = {
-          type: "Point",
-          coordinates: [origin.coordinates.lon, origin.coordinates.lat],
+          type: "LineString",
+          coordinates: [
+            [origin.coordinates.lon, origin.coordinates.lat],
+            [dest.coordinates.lon, dest.coordinates.lat]
+          ],
         };
       } else {
         try {
@@ -551,7 +562,7 @@ export default function AegisGlobe({
 
       if (allSourcesReady) {
         clearInterval(interval);
-        console.log(`[AegisGlobe] Sources verified ready. Pushing data. threats:${threats.length} locs:${locations.length}`);
+        console.log(`[AegisGlobe] Sources verified ready. Pushing data. threats:${threatsRef.current.length} locs:${locationsRef.current.length}`);
         updateThreats();
         updateLocations();
         updateRoutes();
@@ -559,7 +570,7 @@ export default function AegisGlobe({
     }, 100);
 
     return () => clearInterval(interval);
-  }, [threats, locations, routes, highlightedEntities]);
+  }, []); // Empty dependency array—runs once, uses refs for latest data
 
   // ── Make sure painting reacts to selectedThreatId changes ─────
   useEffect(() => {

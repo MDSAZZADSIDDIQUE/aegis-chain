@@ -32,12 +32,22 @@ async def trigger_poll():
         noaa_threats = await fetch_noaa_alerts()
     except Exception as exc:
         logger.error("NOAA ingestion failed: %s", exc)
+        await broadcast("ingest_error", {
+            "source": "noaa",
+            "error": str(exc),
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        })
 
     firms_threats = []
     try:
         firms_threats = await fetch_firms_fires()
     except Exception as exc:
         logger.error("NASA FIRMS ingestion failed: %s", exc)
+        await broadcast("ingest_error", {
+            "source": "nasa_firms",
+            "error": str(exc),
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        })
 
     all_threats = noaa_threats + firms_threats
     indexed = await run_in_threadpool(index_threats, all_threats)

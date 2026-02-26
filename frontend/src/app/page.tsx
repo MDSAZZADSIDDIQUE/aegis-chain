@@ -491,7 +491,7 @@ export default function DashboardPage() {
         {/* ── Selected threat detail overlay ────────────────── */}
         {selectedThreat && (
           <div
-            className="absolute top-4 left-1/2 -translate-x-1/2 px-4 py-2 border border-stone-700 flex items-center gap-4"
+            className="absolute top-4 left-1/2 -translate-x-1/2 px-4 py-2 border border-stone-700 flex items-center gap-4 z-50"
             style={{
               background: "rgba(28,25,23,0.92)",
               backdropFilter: "blur(6px)",

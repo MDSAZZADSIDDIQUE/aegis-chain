@@ -145,6 +145,15 @@ async def fetch_firms_fires() -> list[dict[str, Any]]:
             if not poly.is_valid:
                 poly = make_valid(poly)
 
+            # Mapbox fill layers strictly require Polygons/MultiPolygons
+            if getattr(poly, "geom_type", None) == "GeometryCollection":
+                from shapely.geometry import GeometryCollection, MultiPolygon
+                polys = [geom for geom in poly.geoms if geom.geom_type in ("Polygon", "MultiPolygon")]
+                poly = MultiPolygon(polys) if polys else None
+
+            if not poly or poly.is_empty:
+                continue
+
             centroid = poly.centroid
             # Elasticsearch requires GeoJSON [Longitude, Latitude] order.
             # Shapely and mapping() already output this correctly.
